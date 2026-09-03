@@ -159,7 +159,7 @@ fn config() -> Config {
 /// thing it writes is the shell's opening prompt. Dropping it on the floor
 /// would leave the user looking at a blank terminal - the same class of bug as
 /// the milestone 1 pty sizing fix - so it is buffered and replayed instead.
-async fn wait_for_reply(channel: &mut Channel<Msg>, what: &str) -> AppResult<Vec<u8>> {
+pub(crate) async fn wait_for_reply(channel: &mut Channel<Msg>, what: &str) -> AppResult<Vec<u8>> {
     let mut buffered = Vec::new();
     while let Some(message) = channel.wait().await {
         match message {

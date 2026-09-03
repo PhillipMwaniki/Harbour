@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use russh::client::{Handle, Handler, Msg};
 use russh::{Channel, ChannelMsg, Disconnect};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::error::{AppError, AppResult};
 use crate::session::{ExitReason, Transport};
@@ -29,8 +29,39 @@ const READ_QUEUE_DEPTH: usize = 256;
 /// input the user typed before it.
 enum Command {
     Data(Vec<u8>),
-    Resize { cols: u16, rows: u16 },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
+    /// Open another channel on the same connection - for SFTP. The writer
+    /// task owns the connection handle, so this is where it has to happen.
+    OpenChannel(oneshot::Sender<Result<Channel<Msg>, russh::Error>>),
     Close,
+}
+
+/// A way to open further channels on a running connection.
+///
+/// It is a handle on the writer task's queue rather than on the connection
+/// itself, so the connection keeps exactly one owner and closing the terminal
+/// still closes everything that was riding on it.
+#[derive(Debug, Clone)]
+pub struct ChannelOpener {
+    commands: mpsc::UnboundedSender<Command>,
+}
+
+impl ChannelOpener {
+    pub async fn open(&self) -> AppResult<Channel<Msg>> {
+        let (reply, opened) = oneshot::channel();
+        self.commands
+            .send(Command::OpenChannel(reply))
+            .map_err(|_| AppError::SshChannel("the connection is closed".into()))?;
+        opened
+            .await
+            .map_err(|_| {
+                AppError::SshChannel("the connection closed while opening a channel".into())
+            })?
+            .map_err(|err| AppError::SshChannel(err.to_string()))
+    }
 }
 
 #[derive(Debug)]
@@ -43,6 +74,13 @@ pub struct SshTransport {
 }
 
 impl SshTransport {
+    /// For opening SFTP on this connection. Cheap to clone and to hold.
+    pub fn opener(&self) -> ChannelOpener {
+        ChannelOpener {
+            commands: self.commands.clone(),
+        }
+    }
+
     fn send(&self, command: Command) -> AppResult<()> {
         self.commands
             .send(command)
@@ -172,6 +210,11 @@ where
                     write_half
                         .window_change(cols as u32, rows as u32, 0, 0)
                         .await
+                }
+                Command::OpenChannel(reply) => {
+                    // The asker may have gone away; that is its business.
+                    let _ = reply.send(session.channel_open_session().await);
+                    Ok(())
                 }
                 Command::Close => break,
             };
