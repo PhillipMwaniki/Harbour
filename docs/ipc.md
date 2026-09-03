@@ -39,20 +39,55 @@ A frontend that never acks will see output stop after 1 MB. This is by design.
 | --- | --- | --- |
 | `session_open` | `shellId?: string`, `cols: number`, `rows: number`, `cwd?: string` | `SessionInfo` |
 | `session_subscribe` | `sessionId: string`, `onData: Channel<ArrayBuffer>` | `void` |
-| `session_write` | `sessionId: string`, `data: number[]` | `void` |
+| `session_write` | raw body: the bytes; `session-id` header | `void` |
 | `session_resize` | `sessionId: string`, `cols: number`, `rows: number` | `void` |
 | `session_ack` | `sessionId: string`, `bytes: number` | `void` |
 | `session_set_title` | `sessionId: string`, `title: string` | `void` |
 | `session_close` | `sessionId: string` | `void` |
 | `session_list` | - | `SessionInfo[]` |
+| `session_log_start` | `sessionId: string`, `path: string`, `format: LogFormat`, `append: boolean` | `LogStatus` |
+| `session_log_stop` | `sessionId: string` | `LogStatus` |
+| `session_log_status` | `sessionId: string` | `LogStatus` |
 
 `session_subscribe` may be called **once** per session; a second call returns
 `ALREADY_SUBSCRIBED` rather than silently splitting the stream. Output produced
 between `session_open` and `session_subscribe` is buffered, not dropped.
 
-`session_write` currently passes input as a JSON number array. Keystrokes are
-tiny so this is not on the hot path, but a large paste is measurably slower than
-it needs to be; moving it to a raw request body is tracked for milestone 4.
+`session_write` sends input as a **raw request body**, with the session id in a
+`session-id` header, because the body is the payload. Keystrokes are tiny, but a
+paste is not: a 2 MB buffer as `[104,101,...]` is roughly four times the bytes
+and a JSON parse at the far end. A JSON array body is still accepted, since the
+webview falls back to one when the custom protocol is unavailable.
+
+### Session logging
+
+A log is attached to the session's output pump, one level below the IPC
+boundary, so what lands in the file is exactly what the terminal was sent -
+never what was typed, and never a re-render of the webview's scrollback. It
+starts when it is asked to: what is already on screen is not in the file.
+
+```ts
+type LogFormat = "raw" | "plain";
+
+type LogStatus = {
+  active: boolean;
+  path: string | null;
+  format: LogFormat | null;
+  bytes: number;
+  /** The writer failed. The session carries on regardless. */
+  error: string | null;
+};
+```
+
+`raw` writes every byte, escape sequences included. `plain` removes escape
+sequences and resolves carriage returns, so a progress bar leaves one line
+rather than three hundred, and the file reads the way the screen did.
+
+Starting a log on a session that already has one replaces it, so "log somewhere
+else" is a single action. `session_log_stop` on a session that is not being
+logged is success, not an error. Writes happen on their own thread: a log on a
+full disk records that it fell behind and the session carries on, because
+blocking the pump would throttle the session for a reason nobody asked for.
 
 ### Shells
 
@@ -140,6 +175,36 @@ same, except that a saved password is taken from the keychain without asking,
 and a `connection:auth_prompt` for a saved host carries `canRemember: true` so
 the answer can be saved.
 
+### Settings
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `settings_load` | - | `Settings` |
+| `settings_save` | `settings: Settings` | `Settings` |
+| `settings_reload` | - | `Settings` |
+| `settings_paths` | - | `{ settings: string, logs: string }` |
+| `theme_import` | `path: string` | `SchemeImport` |
+
+`settings_save` replaces the **whole document**; there is no partial update,
+because a settings dialog that merges field by field ends up with two sources
+of truth. What comes back is what was written: the backend clamps and
+deduplicates first, so the caller should keep the response rather than what it
+sent.
+
+The file is `settings.json` beside the vault, and it is meant to be edited by
+hand - `settings_reload` re-reads it. A file that will not parse is moved aside
+to `settings.invalid.json` and replaced by defaults rather than deleted, and
+never stops Harbour from starting. **It holds no secrets of any kind**, only
+preferences: theme, font, keymap, highlight rules, per-host theme overrides and
+where logs go.
+
+`theme_import` reads a VS Code theme, a Windows Terminal `settings.json`, an
+iTerm2 `.itermcolors` file, or a directory of them, and writes nothing: the
+caller reviews the result and saves what it wants with `settings_save`, the same
+way the vault importers work. Imported theme ids are prefixed `imported.` so an
+imported "Nord" cannot shadow the built-in one. `notes` names the files that
+were not colour schemes.
+
 ## Events
 
 | Event | Payload |
@@ -206,6 +271,9 @@ than useless.
 | `FOLDER_NOT_FOUND` | No folder with that id |
 | `VAULT_ERROR` | The store refused: bad input, or SQLite said no |
 | `KEYRING_UNAVAILABLE` | The OS keychain could not be reached |
+| `SETTINGS_ERROR` | The settings file could not be written |
+| `SCHEME_IMPORT_FAILED` | That path held no colour scheme Harbour understands |
+| `LOG_FAILED` | A session log could not be opened |
 | `PROMPT_NOT_FOUND` | `connection_respond` for a prompt no longer waiting |
 | `PROMPT_TIMED_OUT` | Nobody answered a prompt within five minutes |
 | `INTERNAL` | Unclassified; always a bug worth a log line |

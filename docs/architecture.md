@@ -6,22 +6,29 @@ rendering surface, not a place where privileged work happens.
 
 ```
 React frontend (webview)
-  TabBar - TerminalView(s) - ConnectDialog, HostKeyDialog, SecretDialog
+  TabBar - PaneTree -> TerminalView(s) - SearchBar, highlight layer
+           ConnectDialog, HostKeyDialog, SecretDialog, SettingsDialog
            [SftpPane, TransferQueue: milestone 5+]
   SessionTree - HostDialog, ImportDialog
-  Zustand stores: sessions, prompts, vault, ui
+  Zustand stores: sessions, prompts, vault, settings
+  lib/       panes (split tree), keymap, highlight, themes
         |  invoke() / listen() / Channel<bytes>
 Rust core
   commands/  thin handlers: validate, dispatch, no logic
   session/   SessionManager -> SessionHandle per open session
-             local.rs  (portable-pty: ConPTY / forkpty)
-             reader.rs (batching + ack backpressure)
-             shell.rs  (what can we launch here?)
+             local.rs   (portable-pty: ConPTY / forkpty)
+             reader.rs  (batching + ack backpressure)
+             logging.rs (session output to a file, on its own thread)
+             shell.rs   (what can we launch here?)
   ssh/       client.rs      (connect, authenticate, request a pty)
              transport.rs   (the running channel)
              known_hosts.rs (trust, and nothing else)
              agent.rs       (SSH_AUTH_SOCK / OpenSSH pipe / Pageant)
   prompt.rs  round-trip questions to the user
+  settings/  preferences, and the colour schemes imported into them
+             store.rs  (settings.json: atomic write, never fatal)
+             scheme.rs (VS Code / Windows Terminal / iTerm importers)
+             color.rs  (deriving chrome tokens from a terminal palette)
   vault/     saved hosts, and the imports that fill them
              store.rs      (SQLite: folders and hosts, no secrets)
              secrets.rs    (OS keychain: passwords and passphrases)
@@ -46,6 +53,19 @@ are talking to, and neither does the frontend once `ssh_connect` has returned.
 The methods must all return promptly, which is why the SSH transport queues
 commands for a writer task rather than awaiting the remote inline: tearing down
 a session cannot be allowed to block on a host that has stopped answering.
+
+## A tab is a tree of panes
+
+A tab holds a binary tree of splits with a terminal at every leaf. The tree
+(`src/lib/panes.ts`) holds pane ids only; the panes themselves live in a flat
+map beside it on the tab. That separation is what keeps a title arriving, or a
+session attaching, from rebuilding the layout - and it is what lets the tree
+operations be pure functions with tests that never touch a terminal.
+
+A pane's terminal is created once and kept for the life of the pane. Hiding a
+tab sets `display: none` rather than unmounting, because unmounting an xterm
+instance loses its scrollback, and closing a pane is the only thing that ends
+the session behind it.
 
 ## Rules the code follows
 
@@ -92,6 +112,7 @@ a session cannot be allowed to block on a host that has stopped answering.
 | Command handlers | tokio tasks; `shell_list` uses `spawn_blocking` |
 | Local writes and resizes | caller's task, holding a short-lived `parking_lot` lock |
 | Vault and keychain calls | `spawn_blocking`; SQLite is synchronous and macOS can prompt |
+| Session log writer | `harbour-session-log` OS thread, one per open log |
 | SSH channel reader | tokio task, one per session |
 | SSH channel writer, holding the session handle | tokio task, one per session |
 | russh session event loop | tokio task, spawned by russh |
@@ -106,11 +127,35 @@ blocks on a full queue, which stops it reading the pty; the SSH reader task
 stops awaiting the channel, which stops russh adjusting the window, which stops
 the remote sending.
 
-## What is not here yet
+## Settings, and what they are for
 
-The theme system is frontend-only: `src/lib/themes.ts` holds the catalogue and
-`src/stores/settings.ts` publishes the chrome colours as `--hb-*` CSS custom
-properties. Nothing about a theme crosses the IPC boundary.
+`settings.json` sits beside the vault and holds preferences: theme, font,
+scrollback, keymap overrides, highlight rules, per-host theme overrides and
+where session logs go. It is a separate file from the vault for the same reason
+the vault and the keychain are separate - it is a file people copy between
+machines, paste into an issue and hand-edit - and it therefore holds nothing
+that matters if it leaks.
+
+Two rules follow from that. A settings file that will not parse never stops
+Harbour from starting: it is moved aside to `settings.invalid.json` and
+replaced with defaults, because a terminal that refuses to open over a stray
+comma is useless exactly when it is needed. And every write goes through a
+temporary file and a rename, so an interrupted save leaves the old settings
+rather than half a document.
+
+The built-in themes stay in `src/lib/themes.ts` and never cross the IPC
+boundary; only *imported* ones are stored, because only they have to survive a
+restart. An imported scheme describes a terminal palette and nothing else, so
+`settings/scheme.rs` derives the chrome tokens by mixing the scheme's own
+background and foreground - a warm scheme gets warm borders.
+
+The keymap is data (`src/lib/keymap.ts`) rather than a switch statement in a
+keydown handler, because two other things need to read it: the settings file,
+which overrides it, and the settings dialog, which lists it. xterm is told
+which chords the keymap has claimed, so `Ctrl+Shift+[` moves the focus instead
+of also sending an escape to the shell.
+
+## What is not here yet
 
 Milestone 3 covers saved hosts. What the vault does not do yet: reordering
 within a folder (positions exist, nothing sets them), a master password, and

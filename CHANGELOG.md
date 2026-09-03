@@ -7,6 +7,41 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Added
 
+- **Milestone 4: terminal polish.** A tab now holds a tree of split panes -
+  Ctrl+Shift+D splits right, Ctrl+Shift+B splits down, the divider drags, and
+  a split repeats whatever the focused pane was showing, so splitting a host
+  gives a second shell on that host. Closing the last pane closes the tab.
+- Find in the scrollback (Ctrl+Shift+F), with case, whole-word and regular
+  expression toggles, a match count, and search-as-you-type.
+- A user-editable keymap. Every action is listed in Settings with its chords;
+  chords can be recorded by pressing them, reset to the built-in binding, or
+  removed entirely - an action with no chords is unbound, which is how a key is
+  handed back to the terminal. xterm is told which chords Harbour has claimed,
+  so Ctrl+Shift+[ moves the focus instead of also sending an escape.
+- Highlight rules: regular expressions with a foreground and a background,
+  drawn over the output as xterm decorations. A rule whose pattern will not
+  compile is reported beside the rule rather than thrown out of a render, and
+  the rule listed first wins any text two rules both match.
+- Session logging (Ctrl+Shift+L), to `plain` text or to `raw` bytes, with an
+  option to start one for every session. The tap sits on the output pump, so a
+  log records what the terminal was *sent* and never what was typed; writes go
+  to a dedicated thread so a slow disk cannot throttle the session. The pane
+  and its tab both show a marker while a log is running.
+- Importing colour schemes from VS Code themes, Windows Terminal
+  `settings.json` files and iTerm2 `.itermcolors` files - one file or a whole
+  directory. Nothing is saved until reviewed, and files that were not schemes
+  are listed with the reason. Each scheme only describes a terminal palette, so
+  the chrome colours are derived by mixing its own background and foreground.
+- Per-host theme overrides, from the host editor: production that does not look
+  like staging.
+- `settings.json` beside the vault, holding theme, font, scrollback, keymap,
+  highlight rules, per-host themes and logging preferences - and no secrets of
+  any kind. It is meant to be hand-edited: writes are atomic, and a file that
+  will not parse is moved aside to `settings.invalid.json` and replaced with
+  defaults rather than stopping the app from starting.
+- Font size and scrollback are settings, with Ctrl+= / Ctrl+- / Ctrl+0 to
+  change the first without opening a dialog.
+
 - **Milestone 3: the vault.** A SQLite store of saved hosts in a folder tree,
   shown in a session-manager sidebar (Ctrl+Shift+E). Double-click a host, or
   select it and press Enter, to connect.
@@ -77,6 +112,12 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Changed
 
+- `session_write` sends input as a raw request body with the session id in a
+  header, rather than a JSON number array. A large paste was costing four times
+  the bytes and a JSON parse; a JSON body is still accepted for the fallback
+  IPC path.
+- The theme is no longer kept in `localStorage`: it lives in `settings.json`
+  with the rest of the preferences, so there is one source of truth for them.
 - A vault that will not open no longer stops the app: it falls back to an
   in-memory store and logs, so local shells and ad-hoc SSH still work.
 - `russh` uses the `ring` crypto backend rather than the default `aws-lc-rs`,

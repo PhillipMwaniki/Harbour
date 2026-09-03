@@ -7,13 +7,15 @@ no account, no cloud, credentials never leave the machine unencrypted.
 Harbour is an Xshell + Xftp replacement for teams that live on Windows but ship
 to Linux, and it runs the same on macOS and Linux.
 
-> **Status: milestone 3 of 9.** Local shells, SSH and the session manager all
-> work end to end - tabs, ConPTY and forkpty, remote shells over `russh` with
-> agent, key and password auth, host key verification against your existing
-> `known_hosts`, saved hosts in a folder tree with passwords in the OS
-> keychain, imports from `~/.ssh/config` and Xshell, batched output with real
-> backpressure, and a themed UI with eleven built-in colour schemes. Terminal
-> polish, SFTP and transfers are next. See [the roadmap](#roadmap).
+> **Status: milestone 4 of 9.** The terminal is finished: tabs, split panes,
+> find in scrollback, a user-editable keymap, highlight rules and session
+> logging, on top of local shells and SSH that already worked end to end -
+> ConPTY and forkpty, remote shells over `russh` with agent, key and password
+> auth, host key verification against your existing `known_hosts`, saved hosts
+> in a folder tree with passwords in the OS keychain, imports from
+> `~/.ssh/config` and Xshell, and batched output with real backpressure. Eleven
+> built-in colour schemes, plus any VS Code, iTerm or Windows Terminal scheme
+> you import. SFTP and transfers are next. See [the roadmap](#roadmap).
 
 ## Requirements
 
@@ -95,41 +97,90 @@ being dropped silently. Entries whose source never named a username are
 skipped unless you supply one to fall back on - importing under a guess would
 produce hosts that fail to connect for a reason you cannot see.
 
+## Splits, find and logging
+
+A tab holds as many terminals as you want. **Ctrl+Shift+D** splits right and
+**Ctrl+Shift+B** splits down, repeating whatever the focused pane was showing -
+split a host and you get a second shell on the same host. Drag the divider to
+resize; **Ctrl+Shift+W** closes a pane, and the tab goes with its last one.
+
+**Ctrl+Shift+F** searches the scrollback, with case, whole-word and regular
+expression toggles and a count of what it found.
+
+**Ctrl+Shift+L** starts writing the session to a file, and the pane and its tab
+both show a marker while it does. Logs record *output*, never input, because
+the tap sits on the output pump: nothing you type is written, so a password is
+in the file only if the remote echoed it. The `plain` format strips escape
+sequences and resolves carriage returns, so the file reads the way the screen
+did; `raw` keeps every byte. Settings can start a log for every session.
+
+**Highlight rules** colour text in output you do not control - `ERROR` from a
+log that never learned about ANSI, a hostname you must not confuse with
+another. They are regular expressions with a foreground and a background, and
+the rule listed first wins any text two of them match.
+
 ## Themes
 
 Eleven built-in schemes - Harbour Dark, Dark+, Light+, Monokai, Dracula, Nord,
 One Dark, Solarized Dark/Light, Gruvbox Dark and Tokyo Night - switchable from
 the **Theme** button in the tab bar. A theme covers the whole window, not just
 the terminal: chrome colours are published as CSS custom properties, so the tab
-bar, menus and dialogs move with it. The choice is remembered between runs.
+bar, menus and dialogs move with it.
 
-Importing VS Code, iTerm and Windows Terminal colour schemes lands in
-milestone 4, along with per-host theme overrides.
+**Import** a VS Code theme, a Windows Terminal `settings.json`, an iTerm2
+`.itermcolors` file, or a whole directory of them, from *Settings*, under
+*Appearance*. Every one of those describes a terminal palette and nothing else,
+so Harbour derives the chrome colours by mixing the scheme's own background and
+foreground - a warm scheme gets warm borders.
+
+A saved host can **override the theme**, from the Theme field in the host
+editor. Production that does not look like staging is the cheapest safety
+measure a terminal has.
 
 ## Keyboard
+
+Every binding below can be changed under *Keyboard* in Settings, or by editing
+`settings.json` by hand. An action with no chords is unbound, which is how you
+hand a key back to the terminal.
 
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+Shift+T` | New terminal (default shell) |
 | `Ctrl+Shift+N` | New SSH connection |
+| `Ctrl+Shift+K` | Clear the terminal |
+| `Ctrl+Shift+D` / `Ctrl+Shift+B` | Split right / down |
+| `Ctrl+Shift+W` | Close the pane |
+| `Ctrl+Shift+[` / `Ctrl+Shift+]` | Previous / next pane |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Shift+E` | Show or hide the session manager |
-| `Ctrl+Shift+W` | Close the active terminal |
+| `Ctrl+Shift+F` | Find in the terminal |
+| `Ctrl+Shift+L` | Start or stop logging this session |
+| `Ctrl+,` | Settings |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Larger / smaller / default text |
 
-A user-editable keymap arrives in milestone 4.
+## Settings
+
+`settings.json`, beside the vault in the app config directory. It holds the
+theme, the font, the keymap, the highlight rules, the per-host theme overrides
+and where logs go - and **no secrets of any kind**, so it is safe to copy
+between machines or paste into an issue. It is meant to be hand-edited: a file
+that will not parse is moved aside to `settings.invalid.json` and replaced with
+defaults rather than stopping the app from starting.
 
 ## Layout
 
 ```
 src/              React frontend
   app/            layout shell
-  components/     terminal, ssh dialogs, session tree (and later sftp)
+  components/     terminal and panes, ssh dialogs, settings, session tree
   ipc/            typed wrappers around invoke/listen - the only place
                   that knows command names
   stores/         zustand stores, one per domain
-  lib/            themes, formatting, path helpers
+  lib/            panes, keymap, highlight rules, themes, path helpers
 src-tauri/src/    Rust core
   commands/       thin IPC handlers
-  session/        session manager, pty, output pump, shell detection
+  session/        session manager, pty, output pump, logging, shell detection
+  settings/       settings.json, and the colour schemes imported into it
   ssh/            connect and auth, channel transport, known_hosts, agent
   vault/          sqlite host store, os keychain, ssh_config and xshell imports
 docs/             architecture and the IPC contract
@@ -142,8 +193,9 @@ docs/             architecture and the IPC contract
    auth; host key verification and prompts; pty channel. *(done)*
 3. **Vault** - SQLite host store, session tree, OS keychain, `~/.ssh/config`
    import, Xshell `.xsh` import. *(done)*
-4. Terminal polish: splits, search, keymaps, highlight rules, logging, and
-   importing VS Code / iTerm / Windows Terminal colour schemes.
+4. **Terminal polish** - split panes, find in scrollback, a user-editable
+   keymap, highlight rules, session logging, and importing VS Code / iTerm /
+   Windows Terminal colour schemes. *(done)*
 5. SFTP on the shared connection: docked pane, local pane, navigation.
 6. Transfer engine: queue, resume, conflicts, drag and drop, open-in-editor.
 7. Port forwarding, snippets, follow-cwd.

@@ -31,8 +31,17 @@ binding on every change, and most of them predate the code that will need them.
 
 - `tracing` output goes to stderr and a rotating file in the app log directory.
 - Never pass a password, passphrase, private key, or the contents of a terminal
-  session to a logging macro. When a session log is enabled, input is masked
-  while the pty is in no-echo mode.
+  session to a logging macro.
+- **Session logs record output, never input.** A log is attached to the output
+  pump, so what reaches the file is what the terminal was sent. Nothing typed
+  is written by Harbour: a password reaches the file only if the remote echoed
+  it back, which is exactly what a no-echo prompt exists to prevent. This is
+  stronger than masking input, and it is a property of where the tap sits
+  rather than a rule someone has to remember.
+- A session log is nonetheless a plaintext copy of a session, in a directory
+  the user chose. It is off by default, started per session, and the pane and
+  its tab both show a marker while one is running - a log nobody knows about
+  would be worse than no log at all.
 
 ## Host keys
 
@@ -70,9 +79,8 @@ inline, and any future entry must do the same.
 
 ## Current state
 
-Milestone 3 implements the host key rules, the credential handling that goes
-with connecting, and the vault. The master-password and export rules above
-still describe milestone 8.
+Milestone 4 adds session logging and a settings file. The master-password and
+export rules above still describe milestone 8.
 
 Implemented:
 
@@ -97,7 +105,14 @@ Implemented:
   than trusted unverified.
 - Imports that write nothing until reviewed. `~/.ssh/config` and Xshell exports
   are read into a list the user confirms; Xshell passwords are still not
-  decoded, only noted as having existed.
+  decoded, only noted as having existed. Colour scheme imports work the same
+  way, and read colours out of the file and nothing else.
+- A settings file that holds no secrets of any kind - theme, font, keymap,
+  highlight rules, per-host themes, where logs go - and that is treated as
+  untrusted input on the way in: a malformed one is moved aside and replaced
+  with defaults rather than crashing the app, and a highlight rule whose
+  regular expression will not compile is reported beside the rule rather than
+  thrown out of a render.
 
 Not yet:
 
@@ -105,5 +120,5 @@ Not yet:
   file is plain SQLite - it holds no secrets, but it does describe the estate,
   so it is worth the same care as `~/.ssh/config`.
 - Agent forwarding is not implemented at all, which is the safe default.
-- Session logging does not exist, so the no-echo masking rule has nothing to
-  apply to yet.
+- The clipboard rules above are not implemented: a multi-line paste is sent
+  without confirmation. That is milestone 7, with snippets.
