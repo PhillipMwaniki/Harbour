@@ -5,6 +5,8 @@ All notable changes to Harbour are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-03
+
 ### Added
 
 - **Milestone 7: jump hosts, port forwarding, snippets, follow-cwd.** A saved
