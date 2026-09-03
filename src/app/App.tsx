@@ -9,6 +9,7 @@ import { SecretDialog } from "@/components/ssh/SecretDialog";
 import { PaneTree } from "@/components/terminal/PaneTree";
 import { PasteDialog } from "@/components/terminal/PasteDialog";
 import { SnippetPalette } from "@/components/terminal/SnippetPalette";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { paneHandle } from "@/components/terminal/registry";
 import { TabBar } from "@/components/terminal/TabBar";
 import { HostDialog } from "@/components/vault/HostDialog";
@@ -44,6 +45,7 @@ import { toggleLog } from "@/lib/sessionLog";
 import { activePrompt, usePrompts } from "@/stores/prompts";
 import { useFiles } from "@/stores/files";
 import { useForwards } from "@/stores/forwards";
+import { useUpdate } from "@/stores/update";
 import { useTransfers } from "@/stores/transfers";
 import { activePane, focusedPane, paneForSession, useSessions, type Pane } from "@/stores/sessions";
 import { applyThemeVariables, useSettings, useTerminalTheme } from "@/stores/settings";
@@ -133,6 +135,9 @@ export default function App() {
         // Treated as "no keychain": the UI simply will not offer to save.
       }
       useSessions.getState().openTab();
+      // Ask GitHub whether a newer version is out. Quiet: a failed check on a
+      // dev build or offline must not interrupt the user.
+      void useUpdate.getState().check({ silent: true });
     })();
   }, []);
 
@@ -385,6 +390,8 @@ export default function App() {
         filesOpen={filesOpen}
         forwardsOpen={forwardsOpen}
       />
+
+      <UpdateBanner />
 
       {(banner ?? vaultError) && (
         <div

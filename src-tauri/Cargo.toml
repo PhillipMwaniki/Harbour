@@ -42,6 +42,8 @@ keyring = "4"
 zip = { version = "5.0.1", default-features = false, features = ["deflate"] }
 russh-sftp = "2.4.0"
 notify = "8"
+tauri-plugin-updater = "2.11.0"
+tauri-plugin-process = "2.3.1"
 
 [dev-dependencies]
 # The SSH integration tests stand up a real russh server, which needs a key.

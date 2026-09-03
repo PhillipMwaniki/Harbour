@@ -51,7 +51,23 @@
         "depends": []
       },
       "rpm": {
-        "depends": ["webkit2gtk4.1", "gtk3", "librsvg2"]
+        "depends": [
+          "webkit2gtk4.1",
+          "gtk3",
+          "librsvg2"
+        ]
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/PhillipMwaniki/Harbour/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5NkQ1NTJBMDA2RURGMkQKUldRdDMyNEFLbFZ0V2NjOGpHVG9SQXFVZ0NkY09HMVNIMzlVby94TzdjY2dpQ0paS3YrZlFkMCsK",
+      "windows": {
+        "installMode": "passive"
       }
     }
   }
