@@ -198,6 +198,20 @@ impl Connections {
         self.inner.lock().contains_key(session_id)
     }
 
+    /// A way to open further channels on a session's connection - for port
+    /// forwarding. `Err` when the session is a local shell, or has closed.
+    pub fn opener(&self, session_id: &str) -> AppResult<ChannelOpener> {
+        self.inner
+            .lock()
+            .get(session_id)
+            .map(|connection| connection.opener.clone())
+            .ok_or_else(|| {
+                AppError::Forward(format!(
+                    "session {session_id} is not an SSH session, or has already closed"
+                ))
+            })
+    }
+
     /// The session's SFTP channel, opened on first use.
     pub async fn sftp(&self, session_id: &str) -> AppResult<Arc<SftpSession>> {
         let (opener, existing) = {

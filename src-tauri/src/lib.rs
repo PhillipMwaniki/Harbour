@@ -22,6 +22,7 @@ use crate::edit::Editor;
 use crate::prompt::Prompts;
 use crate::session::manager::SessionManager;
 use crate::settings::store::SettingsStore;
+use crate::ssh::forward::Forwards;
 use crate::ssh::known_hosts::KnownHosts;
 use crate::ssh::sftp::Connections;
 use crate::transfer::engine::Engine;
@@ -53,6 +54,8 @@ pub struct AppState {
     pub transfers: Arc<Engine>,
     /// Remote files open in a local editor, uploaded back on save.
     pub edits: Arc<Editor>,
+    /// Local port forwards, by id. Each rides a session's connection.
+    pub forwards: Arc<Forwards>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -94,6 +97,10 @@ pub fn run() {
             let edits = Editor::new(Arc::new(move |edit| {
                 let _ = edit_events.emit("edit:update", edit);
             }));
+            let forward_events = app.handle().clone();
+            let forwards = Forwards::new(Arc::new(move |forward| {
+                let _ = forward_events.emit("forward:update", forward);
+            }));
 
             app.manage(AppState {
                 sessions: Arc::new(SessionManager::new()),
@@ -107,6 +114,7 @@ pub fn run() {
                 connections: Connections::new(),
                 transfers,
                 edits,
+                forwards,
             });
 
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "harbour starting");
@@ -171,6 +179,9 @@ pub fn run() {
             commands::transfer::edit_open,
             commands::transfer::edit_list,
             commands::transfer::edit_close,
+            commands::forward::forward_open_local,
+            commands::forward::forward_list,
+            commands::forward::forward_close,
         ])
         .on_window_event(|window, event| {
             // Killing children on window close keeps orphan shells from

@@ -36,6 +36,13 @@ enum Command {
     /// Open another channel on the same connection - for SFTP. The writer
     /// task owns the connection handle, so this is where it has to happen.
     OpenChannel(oneshot::Sender<Result<Channel<Msg>, russh::Error>>),
+    /// Open a `direct-tcpip` channel to `host:port` - for a local port
+    /// forward. Same reason: the connection lives in the writer task.
+    OpenForward {
+        host: String,
+        port: u16,
+        reply: oneshot::Sender<Result<Channel<Msg>, russh::Error>>,
+    },
     Close,
 }
 
@@ -59,6 +66,25 @@ impl ChannelOpener {
             .await
             .map_err(|_| {
                 AppError::SshChannel("the connection closed while opening a channel".into())
+            })?
+            .map_err(|err| AppError::SshChannel(err.to_string()))
+    }
+
+    /// Opens a `direct-tcpip` channel to `host:port` over this connection, for
+    /// a local port forward: one such channel carries one accepted connection.
+    pub async fn open_forward(&self, host: &str, port: u16) -> AppResult<Channel<Msg>> {
+        let (reply, opened) = oneshot::channel();
+        self.commands
+            .send(Command::OpenForward {
+                host: host.to_string(),
+                port,
+                reply,
+            })
+            .map_err(|_| AppError::SshChannel("the connection is closed".into()))?;
+        opened
+            .await
+            .map_err(|_| {
+                AppError::SshChannel("the connection closed while opening a forward".into())
             })?
             .map_err(|err| AppError::SshChannel(err.to_string()))
     }
@@ -218,6 +244,13 @@ where
                 Command::OpenChannel(reply) => {
                     // The asker may have gone away; that is its business.
                     let _ = reply.send(session.channel_open_session().await);
+                    Ok(())
+                }
+                Command::OpenForward { host, port, reply } => {
+                    let opened = session
+                        .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
+                        .await;
+                    let _ = reply.send(opened);
                     Ok(())
                 }
                 Command::Close => break,

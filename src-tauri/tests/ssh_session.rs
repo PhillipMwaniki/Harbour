@@ -13,12 +13,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use harbour_lib::edit::Editor;
 use harbour_lib::error::AppResult;
 use harbour_lib::files::EntryKind;
 use harbour_lib::session::{ExitReason, Transport};
 use harbour_lib::ssh::client::{self, ConnectRequest, Endpoint};
+use harbour_lib::ssh::forward::{ForwardSpec, Forwards};
 use harbour_lib::ssh::known_hosts::KnownHosts;
 use harbour_lib::ssh::sftp;
 use harbour_lib::ssh::{
@@ -1623,4 +1625,91 @@ async fn connects_through_a_chain_of_jump_hosts() {
         .unwrap();
     let echoed = read_until(&mut connected.output, "through").await;
     assert!(echoed.contains("through"), "saw {echoed:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Local port forwarding
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_local_forward_carries_a_connection_to_a_remote_target() {
+    let echo = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let echo_port = echo.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = echo.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 64];
+                loop {
+                    match socket.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            if socket.write_all(&buf[..n]).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let server = start_server().await;
+    let connected = client::connect(
+        request(server.addr, vec![AuthChoice::Password]),
+        ScriptedAsker::trusting(PASSWORD),
+        Arc::new(temp_known_hosts()),
+        |_, _| {},
+    )
+    .await
+    .expect("the connection should succeed");
+
+    let forwards = Forwards::new(Arc::new(|_| {}));
+    let forward = forwards
+        .open_local(
+            "s1".into(),
+            connected.transport.opener(),
+            ForwardSpec {
+                bind_address: "127.0.0.1".into(),
+                local_port: 0,
+                host: "127.0.0.1".into(),
+                port: echo_port,
+            },
+        )
+        .await
+        .expect("the forward should bind");
+    assert_ne!(forward.local_port, 0, "a concrete port was chosen");
+
+    let mut client = tokio::net::TcpStream::connect(("127.0.0.1", forward.local_port))
+        .await
+        .expect("connect to the forwarded port");
+    client.write_all(b"through the tunnel").await.unwrap();
+    let mut buf = vec![0u8; b"through the tunnel".len()];
+    client.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"through the tunnel");
+
+    assert_eq!(forwards.list().len(), 1);
+    forwards.close(&forward.id).unwrap();
+    assert!(forwards.list().is_empty());
+    assert_eq!(
+        forwards
+            .close(&forward.id)
+            .expect_err("closing twice fails")
+            .code(),
+        "FORWARD_ERROR"
+    );
+
+    // Aborting the accept task releases the listener asynchronously, so give
+    // it a moment before expecting the port back.
+    let mut rebound = false;
+    for _ in 0..50 {
+        if TcpListener::bind(("127.0.0.1", forward.local_port))
+            .await
+            .is_ok()
+        {
+            rebound = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(rebound, "the forward should have released its port");
 }
