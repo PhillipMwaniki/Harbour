@@ -13,6 +13,7 @@
 pub mod agent;
 pub mod client;
 pub mod known_hosts;
+pub mod sftp;
 pub mod transport;
 
 use std::future::Future;

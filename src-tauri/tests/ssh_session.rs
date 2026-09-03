@@ -6,16 +6,19 @@
 //! verification against a store, authentication, the pty and shell requests,
 //! and bytes travelling in both directions over a live channel.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use harbour_lib::error::AppResult;
+use harbour_lib::files::EntryKind;
 use harbour_lib::session::{ExitReason, Transport};
 use harbour_lib::ssh::client::{self, ConnectRequest};
 use harbour_lib::ssh::known_hosts::KnownHosts;
+use harbour_lib::ssh::sftp;
 use harbour_lib::ssh::{
     Asker, AuthChoice, HostKeyAnswer, HostKeyQuestion, HostKeyStatus, SecretAnswer, SecretKind,
     SecretQuestion, SshTarget,
@@ -23,6 +26,9 @@ use harbour_lib::ssh::{
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet};
+use russh_sftp::protocol::{
+    Attrs, File, FileAttributes, Handle as SftpHandle, Name, Status, StatusCode,
+};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
@@ -49,6 +55,11 @@ enum Seen {
 #[derive(Clone)]
 struct TestServer {
     seen: mpsc::UnboundedSender<Seen>,
+    /// Channels the client opened, kept until a subsystem request says what
+    /// they are for. The shell channel never asks, and stays here harmlessly.
+    channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
+    /// Served as `/` over SFTP.
+    sftp_root: PathBuf,
 }
 
 impl russh::server::Server for TestServer {
@@ -72,11 +83,37 @@ impl russh::server::Handler for TestServer {
 
     async fn channel_open_session(
         &mut self,
-        _channel: Channel<Msg>,
+        channel: Channel<Msg>,
         reply: russh::server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.channels.lock().unwrap().insert(channel.id(), channel);
         reply.accept().await;
+        Ok(())
+    }
+
+    /// `sftp` is the only subsystem on offer, served over the channel that
+    /// asked for it. Anything else is refused, the way a locked-down sshd
+    /// would.
+    async fn subsystem_request(
+        &mut self,
+        channel_id: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if name != "sftp" {
+            return session.channel_failure(channel_id);
+        }
+        let Some(channel) = self.channels.lock().unwrap().remove(&channel_id) else {
+            return session.channel_failure(channel_id);
+        };
+        session.channel_success(channel_id)?;
+        let handler = SftpHandler {
+            root: self.sftp_root.clone(),
+            handles: HashMap::new(),
+            next_handle: 0,
+        };
+        tokio::spawn(russh_sftp::server::run(channel.into_stream(), handler));
         Ok(())
     }
 
@@ -145,6 +182,8 @@ impl russh::server::Handler for TestServer {
 struct RunningServer {
     addr: SocketAddr,
     seen: mpsc::UnboundedReceiver<Seen>,
+    /// The directory the server's SFTP serves as `/`; a test fills it.
+    sftp_root: PathBuf,
 }
 
 /// A server offering what a typical host does: a password, and the
@@ -177,12 +216,28 @@ async fn start_server_offering(methods: &[MethodKind]) -> RunningServer {
     let addr = listener.local_addr().expect("local addr");
     let (seen_tx, seen) = mpsc::unbounded_channel();
 
+    let sftp_root = std::env::temp_dir().join(format!(
+        "harbour-sftp-it-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&sftp_root).expect("sftp root");
+    let served = sftp_root.clone();
+
     tokio::spawn(async move {
-        let mut server = TestServer { seen: seen_tx };
+        let mut server = TestServer {
+            seen: seen_tx,
+            channels: Arc::new(Mutex::new(HashMap::new())),
+            sftp_root: served,
+        };
         let _ = server.run_on_socket(config, &listener).await;
     });
 
-    RunningServer { addr, seen }
+    RunningServer {
+        addr,
+        seen,
+        sftp_root,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -613,4 +668,222 @@ async fn closing_a_session_reports_it_as_killed() {
         .expect("closing should report an end");
     assert_eq!(reason, ExitReason::Killed);
     assert_eq!(code, None);
+}
+
+// ---------------------------------------------------------------------------
+// A minimal SFTP server over a temp directory
+// ---------------------------------------------------------------------------
+
+/// Serves one directory tree as `/`: exactly the protocol a listing needs -
+/// realpath, opendir, readdir, close, stat and lstat - and nothing that
+/// writes.
+struct SftpHandler {
+    root: PathBuf,
+    handles: HashMap<String, VecDeque<File>>,
+    next_handle: u32,
+}
+
+impl SftpHandler {
+    /// Normalises a POSIX path under the virtual root: `.` and `` are `/`,
+    /// and `..` pops, so the client's canonicalize gets a real answer.
+    fn canonical(&self, path: &str) -> String {
+        let mut parts: Vec<&str> = Vec::new();
+        for part in path.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                other => parts.push(other),
+            }
+        }
+        format!("/{}", parts.join("/"))
+    }
+
+    fn resolve(&self, path: &str) -> PathBuf {
+        self.canonical(path)
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .fold(self.root.clone(), |dir, part| dir.join(part))
+    }
+}
+
+impl russh_sftp::server::Handler for SftpHandler {
+    type Error = StatusCode;
+
+    fn unimplemented(&self) -> StatusCode {
+        StatusCode::OpUnsupported
+    }
+
+    async fn realpath(&mut self, id: u32, path: String) -> Result<Name, StatusCode> {
+        Ok(Name {
+            id,
+            files: vec![File::dummy(self.canonical(&path))],
+        })
+    }
+
+    async fn opendir(&mut self, id: u32, path: String) -> Result<SftpHandle, StatusCode> {
+        let read = std::fs::read_dir(self.resolve(&path)).map_err(|_| StatusCode::NoSuchFile)?;
+        let mut files = VecDeque::new();
+        for entry in read.flatten() {
+            let meta = entry.metadata().map_err(|_| StatusCode::Failure)?;
+            files.push_back(File::new(
+                entry.file_name().to_string_lossy().into_owned(),
+                FileAttributes::from(&meta),
+            ));
+        }
+        self.next_handle += 1;
+        let handle = self.next_handle.to_string();
+        self.handles.insert(handle.clone(), files);
+        Ok(SftpHandle { id, handle })
+    }
+
+    async fn readdir(&mut self, id: u32, handle: String) -> Result<Name, StatusCode> {
+        let files = self
+            .handles
+            .get_mut(&handle)
+            .ok_or(StatusCode::NoSuchFile)?;
+        if files.is_empty() {
+            return Err(StatusCode::Eof);
+        }
+        Ok(Name {
+            id,
+            files: files.drain(..).collect(),
+        })
+    }
+
+    async fn close(&mut self, id: u32, handle: String) -> Result<Status, StatusCode> {
+        self.handles.remove(&handle);
+        Ok(Status {
+            id,
+            status_code: StatusCode::Ok,
+            error_message: "Ok".into(),
+            language_tag: "en".into(),
+        })
+    }
+
+    async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, StatusCode> {
+        let meta = std::fs::metadata(self.resolve(&path)).map_err(|_| StatusCode::NoSuchFile)?;
+        Ok(Attrs {
+            id,
+            attrs: FileAttributes::from(&meta),
+        })
+    }
+
+    async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, StatusCode> {
+        let meta =
+            std::fs::symlink_metadata(self.resolve(&path)).map_err(|_| StatusCode::NoSuchFile)?;
+        Ok(Attrs {
+            id,
+            attrs: FileAttributes::from(&meta),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SFTP tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sftp_rides_the_terminal_connection_and_lists_directories() {
+    let server = start_server().await;
+    std::fs::create_dir_all(server.sftp_root.join("projects").join("harbour")).unwrap();
+    std::fs::write(server.sftp_root.join("notes.txt"), "hello").unwrap();
+    std::fs::write(server.sftp_root.join(".profile"), "").unwrap();
+
+    let asker = ScriptedAsker::trusting(PASSWORD);
+    let mut connected = client::connect(
+        request(server.addr, vec![AuthChoice::Password]),
+        Arc::clone(&asker),
+        Arc::new(temp_known_hosts()),
+        |_, _| {},
+    )
+    .await
+    .expect("the connection should succeed");
+    read_until(&mut connected.output, "$ ").await;
+
+    let sftp = sftp::open(&connected.transport.opener())
+        .await
+        .expect("the sftp subsystem should open on the same connection");
+    assert_eq!(sftp::home(&sftp).await.unwrap(), "/");
+
+    let root = sftp::list(&sftp, "/").await.unwrap();
+    assert_eq!(root.path, "/");
+    assert_eq!(root.parent, None);
+    let find = |name: &str| {
+        root.entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap_or_else(|| panic!("no {name} in {:?}", root.entries))
+    };
+    assert_eq!(find("projects").kind, EntryKind::Dir);
+    assert_eq!(find("projects").size, None);
+    assert_eq!(find("notes.txt").kind, EntryKind::File);
+    assert_eq!(find("notes.txt").size, Some(5));
+    assert!(find("notes.txt").modified.is_some());
+    assert!(find(".profile").hidden);
+    assert!(!find("notes.txt").hidden);
+
+    // `..` and a trailing slash resolve on the server, so the pane is never
+    // left showing a path that is not where the user is.
+    let nested = sftp::list(&sftp, "/projects/harbour/../").await.unwrap();
+    assert_eq!(nested.path, "/projects");
+    assert_eq!(nested.parent.as_deref(), Some("/"));
+    assert_eq!(nested.entries.len(), 1);
+    assert_eq!(nested.entries[0].name, "harbour");
+
+    let err = sftp::list(&sftp, "/nowhere").await.unwrap_err();
+    assert_eq!(err.code(), "FILES_ERROR");
+
+    // One connection, one password: the file channel asked for nothing.
+    assert_eq!(asker.secret_questions().len(), 1);
+
+    // ...and the terminal on the same connection still works.
+    connected.transport.write(b"still here\r").unwrap();
+    read_until(&mut connected.output, "still here").await;
+    std::fs::remove_dir_all(&server.sftp_root).ok();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_connection_registry_shares_one_sftp_channel_per_session() {
+    let server = start_server().await;
+    let connected = client::connect(
+        request(server.addr, vec![AuthChoice::Password]),
+        ScriptedAsker::trusting(PASSWORD),
+        Arc::new(temp_known_hosts()),
+        |_, _| {},
+    )
+    .await
+    .expect("the connection should succeed");
+
+    let connections = sftp::Connections::new();
+    connections.register("s1".into(), connected.transport.opener());
+
+    let first = connections.sftp("s1").await.unwrap();
+    let second = connections.sftp("s1").await.unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "a second ask must reuse the channel, not open another"
+    );
+    assert!(sftp::list(&first, "/").await.is_ok());
+
+    // A local shell has no entry, and says so rather than hanging.
+    let err = connections
+        .sftp("local-shell")
+        .await
+        .err()
+        .expect("a local shell has no sftp");
+    assert_eq!(err.code(), "SFTP_ERROR");
+
+    connections.remove("s1");
+    assert_eq!(
+        connections
+            .sftp("s1")
+            .await
+            .err()
+            .expect("a removed session has no sftp")
+            .code(),
+        "SFTP_ERROR"
+    );
+    std::fs::remove_dir_all(&server.sftp_root).ok();
 }

@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod error;
+pub mod files;
 pub mod glob;
 pub mod prompt;
 pub mod session;

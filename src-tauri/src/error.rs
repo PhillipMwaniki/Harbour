@@ -79,6 +79,12 @@ pub enum AppError {
     #[error("session logging failed: {0}")]
     LogFailed(String),
 
+    #[error("sftp: {0}")]
+    Sftp(String),
+
+    #[error("{path}: {reason}")]
+    Files { path: String, reason: String },
+
     #[error("prompt {0} is no longer waiting for an answer")]
     PromptNotFound(String),
 
@@ -116,6 +122,8 @@ impl AppError {
             AppError::SchemeImport { .. } => "SCHEME_IMPORT_FAILED",
             AppError::HighlightImport { .. } => "HIGHLIGHT_IMPORT_FAILED",
             AppError::LogFailed(_) => "LOG_FAILED",
+            AppError::Sftp(_) => "SFTP_ERROR",
+            AppError::Files { .. } => "FILES_ERROR",
             AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
             AppError::PromptTimedOut => "PROMPT_TIMED_OUT",
             AppError::Internal(_) => "INTERNAL",

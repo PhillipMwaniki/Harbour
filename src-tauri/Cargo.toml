@@ -40,6 +40,7 @@ data-encoding = "2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 keyring = "4"
 zip = { version = "5.0.1", default-features = false, features = ["deflate"] }
+russh-sftp = "2.4.0"
 
 [dev-dependencies]
 # The SSH integration tests stand up a real russh server, which needs a key.
