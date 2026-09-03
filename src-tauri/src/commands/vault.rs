@@ -265,6 +265,7 @@ pub async fn host_connect(
     let exit_manager = state.sessions.clone();
     let exit_connections = Arc::clone(&state.connections);
     let exit_transfers = Arc::clone(&state.transfers);
+    let exit_edits = Arc::clone(&state.edits);
     let exit_app = app.clone();
 
     let asker = Arc::new(SavedHostAsker {
@@ -289,6 +290,7 @@ pub async fn host_connect(
             exit_manager.remove(&closed.session_id);
             exit_connections.remove(&closed.session_id);
             exit_transfers.cancel_session(&closed.session_id);
+            exit_edits.close_session(&closed.session_id);
             if let Err(err) = exit_app.emit("session:closed", &closed) {
                 tracing::warn!(error = %err, "failed to emit session:closed");
             }

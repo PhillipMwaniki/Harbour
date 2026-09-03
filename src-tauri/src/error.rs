@@ -91,6 +91,9 @@ pub enum AppError {
     #[error("no transfer with id {0}")]
     TransferNotFound(String),
 
+    #[error("edit: {0}")]
+    Edit(String),
+
     #[error("prompt {0} is no longer waiting for an answer")]
     PromptNotFound(String),
 
@@ -132,6 +135,7 @@ impl AppError {
             AppError::Files { .. } => "FILES_ERROR",
             AppError::Transfer(_) => "TRANSFER_ERROR",
             AppError::TransferNotFound(_) => "TRANSFER_NOT_FOUND",
+            AppError::Edit(_) => "EDIT_ERROR",
             AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
             AppError::PromptTimedOut => "PROMPT_TIMED_OUT",
             AppError::Internal(_) => "INTERNAL",

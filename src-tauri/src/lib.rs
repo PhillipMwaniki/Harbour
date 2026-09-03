@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod edit;
 pub mod error;
 pub mod files;
 pub mod glob;
@@ -17,6 +18,7 @@ use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
 
+use crate::edit::Editor;
 use crate::prompt::Prompts;
 use crate::session::manager::SessionManager;
 use crate::settings::store::SettingsStore;
@@ -49,6 +51,8 @@ pub struct AppState {
     /// The transfer queue. Every change to a transfer goes out as a
     /// `transfer:update` event carrying the whole transfer.
     pub transfers: Arc<Engine>,
+    /// Remote files open in a local editor, uploaded back on save.
+    pub edits: Arc<Editor>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -86,6 +90,10 @@ pub fn run() {
             let transfers = Engine::new(Arc::new(move |transfer| {
                 let _ = transfer_events.emit("transfer:update", transfer);
             }));
+            let edit_events = app.handle().clone();
+            let edits = Editor::new(Arc::new(move |edit| {
+                let _ = edit_events.emit("edit:update", edit);
+            }));
 
             app.manage(AppState {
                 sessions: Arc::new(SessionManager::new()),
@@ -98,6 +106,7 @@ pub fn run() {
                 log_dir: log_dir.clone(),
                 connections: Connections::new(),
                 transfers,
+                edits,
             });
 
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "harbour starting");
@@ -159,6 +168,9 @@ pub fn run() {
             commands::transfer::transfer_resolve,
             commands::transfer::transfer_remove,
             commands::transfer::transfer_clear_finished,
+            commands::transfer::edit_open,
+            commands::transfer::edit_list,
+            commands::transfer::edit_close,
         ])
         .on_window_event(|window, event| {
             // Killing children on window close keeps orphan shells from

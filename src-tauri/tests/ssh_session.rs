@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::time::Duration;
 
+use harbour_lib::edit::Editor;
 use harbour_lib::error::AppResult;
 use harbour_lib::files::EntryKind;
 use harbour_lib::session::{ExitReason, Transport};
@@ -1395,5 +1396,70 @@ async fn a_closing_session_cancels_what_was_queued_on_it() {
     assert_eq!(engine.clear_finished(), 4);
     assert!(engine.list().is_empty());
     std::fs::remove_dir_all(&local).ok();
+    std::fs::remove_dir_all(&server.sftp_root).ok();
+}
+
+// ---------------------------------------------------------------------------
+// Open in editor
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edited_file_is_uploaded_on_save_and_cleaned_up_on_close() {
+    let server = start_server().await;
+    let sftp = connect_sftp(&server).await;
+    std::fs::write(server.sftp_root.join("notes.txt"), "before").unwrap();
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let editor = Editor::new(Arc::new(move |info: &harbour_lib::edit::EditInfo| {
+        sink.lock().unwrap().push(info.clone());
+    }));
+
+    let launched = Arc::new(Mutex::new(None));
+    let record = Arc::clone(&launched);
+    let info = editor
+        .open("s1".into(), Arc::clone(&sftp), "/notes.txt", move |path| {
+            *record.lock().unwrap() = Some(path.to_path_buf());
+            Ok(())
+        })
+        .await
+        .expect("open");
+
+    let local = launched
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the editor was launched");
+    assert_eq!(local.display().to_string(), info.local_path);
+    assert_eq!(std::fs::read_to_string(&local).unwrap(), "before");
+
+    // The user saves.
+    std::fs::write(&local, "after").unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let uploads = editor.list().first().map(|e| e.uploads).unwrap_or(0);
+        if uploads >= 1 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the save was never uploaded"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        std::fs::read_to_string(server.sftp_root.join("notes.txt")).unwrap(),
+        "after"
+    );
+    assert!(seen
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|e| e.uploads == 1 && e.error.is_none()));
+
+    editor.close(&info.id).unwrap();
+    assert!(!local.exists(), "the working copy is removed");
+    assert!(editor.list().is_empty());
+    assert_eq!(editor.close(&info.id).unwrap_err().code(), "EDIT_ERROR");
     std::fs::remove_dir_all(&server.sftp_root).ok();
 }
