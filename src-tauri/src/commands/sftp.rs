@@ -1,8 +1,9 @@
 //! File pane IPC surface: the remote side over SFTP, the local side over
 //! `std::fs`. See `docs/ipc.md` for the contract.
 //!
-//! Nothing here writes to either file system. Milestone 5 is looking;
-//! milestone 6 brings the transfers, and with them the first mutation.
+//! The `*_mkdir`, `*_rename` and `*_remove` commands are the only things in
+//! this file that change a file system, and every one of them is a single,
+//! named operation the user asked for by name. Copying is `commands::transfer`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -79,4 +80,57 @@ pub async fn local_roots() -> AppResult<Vec<String>> {
 pub async fn local_list(path: String) -> AppResult<Listing> {
     let path = PathBuf::from(path);
     blocking(move || local::list(&path)).await
+}
+
+// ---------------------------------------------------------------------------
+// Making, renaming and removing
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn sftp_mkdir(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> AppResult<()> {
+    let session = state.connections.sftp(&session_id).await?;
+    sftp::mkdir(&session, &path).await
+}
+
+#[tauri::command]
+pub async fn sftp_rename(
+    state: State<'_, AppState>,
+    session_id: String,
+    from: String,
+    to: String,
+) -> AppResult<()> {
+    let session = state.connections.sftp(&session_id).await?;
+    sftp::rename(&session, &from, &to).await
+}
+
+/// `recursive` is required to remove a directory with anything in it. The UI
+/// asks before sending it.
+#[tauri::command]
+pub async fn sftp_remove(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    recursive: bool,
+) -> AppResult<()> {
+    let session = state.connections.sftp(&session_id).await?;
+    sftp::remove(&session, &path, recursive).await
+}
+
+#[tauri::command]
+pub async fn local_mkdir(path: String) -> AppResult<()> {
+    blocking(move || local::mkdir(&PathBuf::from(path))).await
+}
+
+#[tauri::command]
+pub async fn local_rename(from: String, to: String) -> AppResult<()> {
+    blocking(move || local::rename(&PathBuf::from(from), &PathBuf::from(to))).await
+}
+
+#[tauri::command]
+pub async fn local_remove(path: String, recursive: bool) -> AppResult<()> {
+    blocking(move || local::remove(&PathBuf::from(path), recursive)).await
 }

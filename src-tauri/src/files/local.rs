@@ -67,6 +67,30 @@ pub fn list(path: &Path) -> AppResult<Listing> {
     })
 }
 
+pub fn mkdir(path: &Path) -> AppResult<()> {
+    std::fs::create_dir(path).map_err(|err| fail(path, err))
+}
+
+pub fn rename(from: &Path, to: &Path) -> AppResult<()> {
+    std::fs::rename(from, to).map_err(|err| fail(from, err))
+}
+
+/// Removes a file, an empty directory, or - with `recursive` - a directory and
+/// everything under it. A symlink is removed as a link, never followed.
+pub fn remove(path: &Path, recursive: bool) -> AppResult<()> {
+    let meta = std::fs::symlink_metadata(path).map_err(|err| fail(path, err))?;
+    let result = if meta.is_dir() {
+        if recursive {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_dir(path)
+        }
+    } else {
+        std::fs::remove_file(path)
+    };
+    result.map_err(|err| fail(path, err))
+}
+
 fn entry(item: &std::fs::DirEntry) -> Entry {
     let name = item.file_name().to_string_lossy().into_owned();
     let path = item.path();
@@ -208,6 +232,28 @@ mod tests {
         assert!(!roots.is_empty());
         let listing = list(Path::new(&roots[0])).unwrap();
         assert_eq!(listing.parent, None, "{}", listing.path);
+    }
+
+    #[test]
+    fn makes_renames_and_removes() {
+        let dir = temp();
+        mkdir(&dir.join("made")).unwrap();
+        assert!(dir.join("made").is_dir());
+
+        rename(&dir.join("made"), &dir.join("moved")).unwrap();
+        assert!(!dir.join("made").exists());
+        assert!(dir.join("moved").is_dir());
+
+        std::fs::write(dir.join("moved").join("inner.txt"), "x").unwrap();
+        // A non-empty directory needs `recursive`; without it the error names
+        // the directory rather than deleting what is in it.
+        let err = remove(&dir.join("moved"), false).unwrap_err();
+        assert_eq!(err.code(), "FILES_ERROR");
+        assert!(dir.join("moved").join("inner.txt").exists());
+
+        remove(&dir.join("moved"), true).unwrap();
+        assert!(!dir.join("moved").exists());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

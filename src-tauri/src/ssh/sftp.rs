@@ -118,6 +118,47 @@ pub async fn list(sftp: &SftpSession, path: &str) -> AppResult<Listing> {
     })
 }
 
+pub async fn mkdir(sftp: &SftpSession, path: &str) -> AppResult<()> {
+    sftp.create_dir(path)
+        .await
+        .map_err(|err| path_error(path, err))
+}
+
+pub async fn rename(sftp: &SftpSession, from: &str, to: &str) -> AppResult<()> {
+    sftp.rename(from, to)
+        .await
+        .map_err(|err| path_error(from, err))
+}
+
+/// Removes a file, an empty directory, or - with `recursive` - a directory
+/// and everything under it. Symlinks are removed as links, never followed:
+/// deleting a linked directory must not empty the directory it points at.
+pub async fn remove(sftp: &SftpSession, path: &str, recursive: bool) -> AppResult<()> {
+    let meta = sftp
+        .symlink_metadata(path)
+        .await
+        .map_err(|err| path_error(path, err))?;
+    if !meta.is_dir() {
+        return sftp
+            .remove_file(path)
+            .await
+            .map_err(|err| path_error(path, err));
+    }
+    if recursive {
+        let entries = sftp
+            .read_dir(path)
+            .await
+            .map_err(|err| path_error(path, err))?;
+        for entry in entries {
+            let child = posix_join(path, &entry.file_name());
+            Box::pin(remove(sftp, &child, true)).await?;
+        }
+    }
+    sftp.remove_dir(path)
+        .await
+        .map_err(|err| path_error(path, err))
+}
+
 struct Connection {
     opener: ChannelOpener,
     /// Opened on first use and kept for the life of the session: a listing

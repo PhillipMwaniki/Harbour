@@ -132,6 +132,12 @@ pub fn run() {
             commands::sftp::local_home,
             commands::sftp::local_roots,
             commands::sftp::local_list,
+            commands::sftp::sftp_mkdir,
+            commands::sftp::sftp_rename,
+            commands::sftp::sftp_remove,
+            commands::sftp::local_mkdir,
+            commands::sftp::local_rename,
+            commands::sftp::local_remove,
         ])
         .on_window_event(|window, event| {
             // Killing children on window close keeps orphan shells from
