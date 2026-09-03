@@ -20,6 +20,7 @@ use crate::prompt::Prompts;
 use crate::session::manager::SessionManager;
 use crate::settings::store::SettingsStore;
 use crate::ssh::known_hosts::KnownHosts;
+use crate::ssh::sftp::Connections;
 use crate::vault::store::Vault;
 
 /// Everything the command handlers need. Kept deliberately small: each
@@ -40,6 +41,9 @@ pub struct AppState {
     /// frontend needs it to build a file name, so it is state rather than a
     /// value computed where it is used.
     pub log_dir: PathBuf,
+    /// The SSH connection behind each live SSH session, so the file pane can
+    /// open SFTP on it. The session manager itself knows nothing about SSH.
+    pub connections: Arc<Connections>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -80,6 +84,7 @@ pub fn run() {
                 vault: Arc::new(vault),
                 settings: Arc::new(SettingsStore::open(config_dir.join("settings.json"))),
                 log_dir: log_dir.clone(),
+                connections: Connections::new(),
             });
 
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "harbour starting");
@@ -121,6 +126,12 @@ pub fn run() {
             commands::settings::settings_paths,
             commands::settings::theme_import,
             commands::settings::highlight_import,
+            commands::sftp::sftp_home,
+            commands::sftp::sftp_list,
+            commands::sftp::sftp_close,
+            commands::sftp::local_home,
+            commands::sftp::local_roots,
+            commands::sftp::local_list,
         ])
         .on_window_event(|window, event| {
             // Killing children on window close keeps orphan shells from

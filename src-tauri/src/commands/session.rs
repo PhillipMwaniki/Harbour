@@ -159,6 +159,7 @@ pub async fn session_set_title(
 
 #[tauri::command]
 pub async fn session_close(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
+    state.connections.remove(&session_id);
     state.sessions.close(&session_id)
 }
 

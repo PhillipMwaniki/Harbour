@@ -263,6 +263,7 @@ pub async fn host_connect(
     let id = manager::new_id();
     let exit_id = id.clone();
     let exit_manager = state.sessions.clone();
+    let exit_connections = Arc::clone(&state.connections);
     let exit_app = app.clone();
 
     let asker = Arc::new(SavedHostAsker {
@@ -285,6 +286,7 @@ pub async fn host_connect(
         move |reason, code| {
             let closed = SessionClosed::new(exit_id, reason, code);
             exit_manager.remove(&closed.session_id);
+            exit_connections.remove(&closed.session_id);
             if let Err(err) = exit_app.emit("session:closed", &closed) {
                 tracing::warn!(error = %err, "failed to emit session:closed");
             }
@@ -299,6 +301,7 @@ pub async fn host_connect(
         "opened a session to a saved host"
     );
 
+    let opener = connected.transport.opener();
     let info = state.sessions.adopt(NewSession {
         id,
         kind: SessionKind::Ssh,
@@ -306,6 +309,7 @@ pub async fn host_connect(
         transport: Box::new(connected.transport),
         output: connected.output,
     });
+    state.connections.register(info.session_id.clone(), opener);
 
     let _ = app.emit("session:opened", &info);
     Ok(info)
