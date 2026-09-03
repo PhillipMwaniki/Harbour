@@ -174,6 +174,7 @@ jobs:
       # them on just for this build; the signing itself needs the secrets in
       # the tauri-action env below.
       - name: Enable updater artifacts
+        if: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         shell: bash
         run: >
           node -e "const f='src-tauri/tauri.conf.json';
