@@ -67,6 +67,12 @@ pub enum AppError {
     #[error("the system keychain is not usable: {0}")]
     Keyring(String),
 
+    #[error("the settings could not be saved: {0}")]
+    Settings(String),
+
+    #[error("could not import a colour scheme from {path}: {reason}")]
+    SchemeImport { path: String, reason: String },
+
     #[error("prompt {0} is no longer waiting for an answer")]
     PromptNotFound(String),
 
@@ -100,6 +106,8 @@ impl AppError {
             AppError::FolderNotFound(_) => "FOLDER_NOT_FOUND",
             AppError::Vault(_) => "VAULT_ERROR",
             AppError::Keyring(_) => "KEYRING_UNAVAILABLE",
+            AppError::Settings(_) => "SETTINGS_ERROR",
+            AppError::SchemeImport { .. } => "SCHEME_IMPORT_FAILED",
             AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
             AppError::PromptTimedOut => "PROMPT_TIMED_OUT",
             AppError::Internal(_) => "INTERNAL",

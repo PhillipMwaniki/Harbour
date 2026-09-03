@@ -3,16 +3,19 @@ pub mod error;
 pub mod glob;
 pub mod prompt;
 pub mod session;
+pub mod settings;
 pub mod ssh;
 pub mod telemetry;
 pub mod vault;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::Manager;
 
 use crate::prompt::Prompts;
 use crate::session::manager::SessionManager;
+use crate::settings::store::SettingsStore;
 use crate::ssh::known_hosts::KnownHosts;
 use crate::vault::store::Vault;
 
@@ -27,6 +30,13 @@ pub struct AppState {
     /// Saved hosts and the folder tree. Holds no secrets; those are in the OS
     /// keychain, addressed by host id.
     pub vault: Arc<Vault>,
+    /// Preferences: theme, keymap, highlight rules, logging. A separate file
+    /// from the vault because it is one people hand-edit and copy about.
+    pub settings: Arc<SettingsStore>,
+    /// Where session logs go when the user has not named a directory. The
+    /// frontend needs it to build a file name, so it is state rather than a
+    /// value computed where it is used.
+    pub log_dir: PathBuf,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -65,6 +75,8 @@ pub fn run() {
                 // ~/.ssh: the user's file is read but never written to.
                 known_hosts: Arc::new(KnownHosts::new(config_dir.join("known_hosts"))),
                 vault: Arc::new(vault),
+                settings: Arc::new(SettingsStore::open(config_dir.join("settings.json"))),
+                log_dir: log_dir.clone(),
             });
 
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "harbour starting");
@@ -97,6 +109,11 @@ pub fn run() {
             commands::vault::vault_preview_xshell,
             commands::vault::vault_apply_import,
             commands::vault::host_connect,
+            commands::settings::settings_load,
+            commands::settings::settings_save,
+            commands::settings::settings_reload,
+            commands::settings::settings_paths,
+            commands::settings::theme_import,
         ])
         .on_window_event(|window, event| {
             // Killing children on window close keeps orphan shells from
