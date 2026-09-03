@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>Harbour app icon</title>
+  <!-- deep sea -->
+  <rect width="256" height="256" rx="56" fill="#1A2A3A"/>
+  <!-- left stroke: SSH tunnel, straight and locked -->
+  <rect x="52" y="52" width="40" height="152" rx="12" fill="#EAF2F7"/>
+  <!-- right stroke: FTP stream, tapers into a downward arrow -->
+  <rect x="164" y="52" width="40" height="112" rx="12" fill="#00B4D8"/>
+  <path d="M164 150 h40 L184 190 Z" fill="#00B4D8"/>
+  <!-- crossbar: the pier where connections land -->
+  <rect x="88" y="118" width="80" height="22" fill="#EAF2F7"/>
+  <!-- harbour light on the pier -->
+  <circle cx="128" cy="105" r="9" fill="#FFB703"/>
+  <!-- terminal cursor docked below the pier -->
+  <rect x="116" y="152" width="24" height="32" rx="3" fill="#00B4D8"/>
+</svg>
