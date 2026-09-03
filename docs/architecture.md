@@ -9,7 +9,7 @@ React frontend (webview)
   TabBar - PaneTree -> TerminalView(s) - SearchBar, highlight layer
            ConnectDialog, HostKeyDialog, SecretDialog, SettingsDialog
            FileDock -> FilePane (remote over SFTP, and local)
-           [TransferQueue: milestone 6]
+           TransferPanel, ConflictDialog
   SessionTree - HostDialog, ImportDialog
   Zustand stores: sessions, prompts, vault, settings, files
   lib/       panes (split tree), keymap, highlight, themes
@@ -29,6 +29,10 @@ Rust core
   prompt.rs  round-trip questions to the user
   files/     directory listings in one shape
              local.rs  (std::fs, made to look like SFTP)
+  transfer/  the queue
+             engine.rs (slots, pause, cancel, conflicts, snapshots)
+             copy.rs   (planning a tree, then moving one file at a time)
+  edit.rs    a remote file in the local editor, uploaded on save
   settings/  preferences, and the colour schemes imported into them
              store.rs  (settings.json: atomic write, never fatal)
              scheme.rs (VS Code / Windows Terminal / iTerm importers)
@@ -92,6 +96,34 @@ rather than inside it: the manager knows about transports and nothing about
 SSH, and this is the one place that needs to. A local shell has no entry,
 which is how `sftp_*` learns a session has no remote side.
 
+## Transfers stop to ask
+
+A transfer is a tokio task. It waits for one of its session's two slots, plans
+the whole tree first - so the totals are known and every directory exists
+before its files - and then copies one file at a time, checking a `Control`
+between 256 KB chunks. That check is where a pause takes hold and where a
+cancel arrives, so neither waits for a file to finish.
+
+Every change to a transfer goes out through one emitter as the whole
+snapshot: progress at most a few times a second, state changes always. The
+frontend keeps the latest copy of each and renders it; it never derives state
+from a sequence of deltas, and a missed event costs nothing.
+
+A destination that already exists is a decision, not an error. Under the
+default policy the task parks on a `oneshot` and the transfer shows as
+`conflict` with both sides described; the answer can cover the rest of the
+transfer. Resume is offered only when the destination is smaller than the
+source, because resuming onto anything else would produce a corrupt file. A
+directory in the way of a file is the one case that fails outright: no answer
+to "overwrite?" makes it right.
+
+Open-in-editor is the same channel used differently. The file is downloaded to
+a private directory, handed to the OS, and its *directory* is watched -
+editors save in place or by writing and renaming, and watching the directory
+catches both - with a short settle so one save is one upload. The upload
+truncates: a save shorter than the file it replaces must not leave the old
+tail behind.
+
 ## Rules the code follows
 
 1. **The core owns lifetime.** The frontend asks to open and close things; it
@@ -142,6 +174,8 @@ which is how `sftp_*` learns a session has no remote side.
 | SSH channel writer, holding the session handle | tokio task, one per session |
 | SFTP channel open | inside the writer task, on request; the channel itself is driven by `russh-sftp` |
 | Local directory listing | `spawn_blocking`; `std::fs` and drive probing touch the disk |
+| Transfer copy | one tokio task per transfer, two running at a time per session |
+| Save watcher | `notify`'s own thread, bridged to one tokio task per edit |
 | russh session event loop | tokio task, spawned by russh |
 
 `LocalTransport` guards its writer, master pty and killer behind separate
@@ -189,8 +223,8 @@ within a folder (positions exist, nothing sets them), a master password, and
 encrypted export - the last two are milestone 8. Host certificates, agent
 forwarding and port forwarding are later still.
 
-The file panes are read-only: milestone 5 is looking, and milestone 6 adds
-the transfer engine and with it the first mutation of either file system.
-Transfers and the fleet runner each add a sibling module under
+The transfer queue is not persisted: it lives as long as the app does, and a
+transfer whose session closes is cancelled with its last state saying so.
+Port forwarding and the fleet runner each add a sibling module under
 `src-tauri/src/`, and the `SessionKind` enum grows a variant per transport. The
 IPC shapes for those are reserved in `docs/ipc.md`.

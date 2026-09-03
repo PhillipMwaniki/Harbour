@@ -288,8 +288,119 @@ dropping a `/` component or a `\` one. `local_list` on Windows returns plain
 `C:\...` paths, never the `\\?\` form `canonicalize` produces. Hidden entries
 are included and flagged: showing them is a toggle, not a round trip.
 
-Nothing in this domain writes to either file system. Transfers, and with them
-the first mutation, are milestone 6.
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `sftp_mkdir` | `sessionId: string`, `path: string` | `void` |
+| `sftp_rename` | `sessionId: string`, `from: string`, `to: string` | `void` |
+| `sftp_remove` | `sessionId: string`, `path: string`, `recursive: boolean` | `void` |
+| `local_mkdir` | `path: string` | `void` |
+| `local_rename` | `from: string`, `to: string` | `void` |
+| `local_remove` | `path: string`, `recursive: boolean` | `void` |
+
+These are the only commands in the files domain that change a file system,
+and each is one named operation the user asked for by name. `*_remove` needs
+`recursive: true` to delete a directory with anything in it; the UI asks
+before sending it. A symlink is removed as a link, never followed.
+
+### Transfers
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `transfer_enqueue` | `sessionId: string`, `items: TransferRequest[]`, `policy: ConflictPolicy` | `Transfer[]` |
+| `transfer_list` | - | `Transfer[]` |
+| `transfer_pause` | `id: string` | `void` |
+| `transfer_resume` | `id: string` | `void` |
+| `transfer_cancel` | `id: string` | `void` |
+| `transfer_resolve` | `id: string`, `resolution: Resolution`, `applyToAll: boolean` | `void` |
+| `transfer_remove` | `id: string` | `void` |
+| `transfer_clear_finished` | - | `number` |
+
+A transfer is one source path to one destination path - a file, or a directory
+and everything under it - riding the SFTP channel of `sessionId`. Two run at a
+time per session; the rest wait as `queued`. Progress does not come back from
+these calls: every change to a transfer is a `transfer:update` event carrying
+the **whole transfer**, so the UI is a projection and never reconstructs state
+from deltas it might have missed.
+
+```ts
+type TransferRequest = {
+  direction: "upload" | "download";
+  source: string;
+  destination: string;   // the full target path, not the directory
+};
+
+type ConflictPolicy = "ask" | "overwrite" | "skip" | "resume" | "rename";
+type Resolution = "overwrite" | "skip" | "resume" | "rename" | "cancel";
+
+type Transfer = {
+  id: string;
+  sessionId: string;
+  direction: "upload" | "download";
+  source: string;
+  destination: string;
+  state: "queued" | "running" | "paused" | "conflict"
+       | "done" | "skipped" | "cancelled" | "failed";
+  conflict: ConflictInfo | null;   // set while state is "conflict"
+  bytesDone: number;
+  bytesTotal: number;              // zero until planned
+  filesDone: number;
+  filesTotal: number;
+  currentFile: string | null;
+  error: string | null;
+  queuedAt: number;
+};
+
+type ConflictInfo = {
+  path: string;                    // the destination that already exists
+  sourceSize: number;
+  sourceModified: number | null;
+  destinationSize: number;
+  destinationModified: number | null;
+  resumable: boolean;              // destination is smaller than source
+};
+```
+
+A file that already exists at the destination is handled by the transfer's
+`policy`. With `ask`, the transfer stops in state `conflict` with the file
+described, and waits for `transfer_resolve`; `applyToAll` turns the answer into
+the policy for the rest of that transfer. `resume` continues a smaller
+destination from where it stops, treats an equal one as already done, and
+overwrites a larger one - which cannot be a partial copy of the source.
+`rename` writes beside as `name (1).ext`. Time stamps travel with files in both
+directions.
+
+`transfer_pause` takes effect at the next chunk - 256 KB - and the state
+changes to `paused` once the copy has actually stopped. `transfer_cancel` works
+in any state, including waiting on a conflict. A session that closes cancels
+everything queued on it. Nothing is persisted: the queue lives as long as the
+app does.
+
+### Open in editor
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `edit_open` | `sessionId: string`, `path: string` | `EditInfo` |
+| `edit_list` | - | `EditInfo[]` |
+| `edit_close` | `id: string` | `void` |
+
+`edit_open` downloads the remote file to a private directory under the
+platform temp directory, opens it with whatever the OS opens that type with,
+and watches it: every save is uploaded back, whole, replacing the remote file.
+Changes arrive as `edit:update` events. `edit_close` stops watching and removes
+the working copy; closing the session does the same for every edit on it.
+
+```ts
+type EditInfo = {
+  id: string;
+  sessionId: string;
+  remotePath: string;
+  localPath: string;
+  uploads: number;
+  lastUpload: number | null;
+  error: string | null;    // the last upload failed; the local copy is intact
+  closed: boolean;
+};
+```
 
 ## Events
 
@@ -297,6 +408,8 @@ the first mutation, are milestone 6.
 | --- | --- |
 | `session:opened` | `SessionInfo` |
 | `session:closed` | `{ sessionId, reason: "exit" \| "killed" \| "error", exitCode: number \| null }` |
+| `transfer:update` | `Transfer` - the whole transfer, on every change |
+| `edit:update` | `EditInfo` - on open, on every upload, on failure, on close |
 
 `session:closed` fires when the child process is reaped, whether it exited on
 its own or was killed by `session_close`. For an SSH session it fires when the
@@ -361,7 +474,10 @@ than useless.
 | `SCHEME_IMPORT_FAILED` | That path held no colour scheme Harbour understands |
 | `HIGHLIGHT_IMPORT_FAILED` | That path held no Xshell highlight set |
 | `SFTP_ERROR` | The session has no remote side, or its SFTP channel could not be opened |
-| `FILES_ERROR` | A directory could not be listed; the message names it |
+| `FILES_ERROR` | A path could not be listed, made, renamed, removed or copied; the message names it |
+| `TRANSFER_ERROR` | A transfer command did not apply: not waiting on a conflict, still running |
+| `TRANSFER_NOT_FOUND` | No transfer with that id |
+| `EDIT_ERROR` | A file could not be opened for editing, or no such edit |
 | `LOG_FAILED` | A session log could not be opened |
 | `PROMPT_NOT_FOUND` | `connection_respond` for a prompt no longer waiting |
 | `PROMPT_TIMED_OUT` | Nobody answered a prompt within five minutes |
@@ -373,5 +489,5 @@ useless when the real problem is `PasswordAuthentication no`.
 
 ## Not yet implemented
 
-The spec defines further domains - `transfer_*`, `forward_*` and `fleet_*`. They are listed here so the naming stays consistent when they land,
+The spec defines further domains - `forward_*` and `fleet_*`. They are listed here so the naming stays consistent when they land,
 but no handler exists yet.

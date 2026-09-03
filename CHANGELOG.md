@@ -13,6 +13,25 @@ All notable changes to Harbour are recorded here. The format follows
   leaves publishing to a person. It refuses a tag whose version disagrees with
   `package.json`, `tauri.conf.json` or `Cargo.toml`, or that has no changelog
   section, before building anything.
+- **Milestone 6: the transfer engine.** Drag rows between the remote and local
+  panes, or onto a directory in the other pane, to copy them - a file, or a
+  directory and everything under it - and drag files in from the desktop to
+  upload them. A queue at the foot of the file dock shows progress; two
+  transfers run at a time per host; pause takes hold at the next 256 KB chunk
+  and cancel works at any point. Time stamps travel with the files.
+- Conflicts stop to ask. A file already at the destination shows both sides'
+  size and date and offers overwrite, skip, keep both (`name (1).ext`) or -
+  when the existing copy is smaller than the source - resume from where it
+  stops, with one answer able to cover the rest of the transfer. Resuming onto
+  anything but a smaller copy is never offered, since it would corrupt the
+  file.
+- Open in editor: a remote file downloaded to a private temporary directory,
+  opened with the OS default for its type, and uploaded back - whole,
+  truncating - on every save, whether the editor writes in place or by
+  renaming over the file. Closing the entry or the session removes the copy.
+- New folder, rename and delete on both panes, from the context menu and the
+  keyboard. Delete asks first, and a directory is only removed recursively when
+  the user has said so.
 - **Milestone 5: SFTP on the shared connection.** File panes (Ctrl+Shift+S)
   docked beside the terminals: the remote machine over SFTP on top, the local
   machine below. The remote side is a second channel on the SSH connection the

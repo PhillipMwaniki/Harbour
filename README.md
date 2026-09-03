@@ -7,14 +7,15 @@ no account, no cloud, credentials never leave the machine unencrypted.
 Harbour is an Xshell + Xftp replacement for teams that live on Windows but ship
 to Linux, and it runs the same on macOS and Linux.
 
-> **Status: milestone 5 of 9.** The file panes are in: browse the remote
-> machine over SFTP on the connection the terminal already has - no second
-> login - beside a pane for the local machine. Underneath, a finished
-> terminal: tabs, split panes, find in scrollback, a user-editable keymap,
-> highlight rules and session logging; local shells and SSH end to end with
-> agent, key and password auth; host keys checked against your existing
-> `known_hosts`; saved hosts with passwords in the OS keychain; imports from
-> `~/.ssh/config` and Xshell backups. Transfers are next. See
+> **Status: milestone 6 of 9.** Files move: drag between the remote and local
+> panes or in from the desktop, with a queue that pauses, resumes, asks before
+> overwriting and can pick up a partial copy where it stopped; open a remote
+> file in your editor and every save goes back. Underneath, SFTP on the
+> connection the terminal already has, a finished terminal with splits, find,
+> keymap, highlight rules and logging, SSH end to end with agent, key and
+> password auth, host keys checked against your existing `known_hosts`, saved
+> hosts with passwords in the OS keychain, and imports from `~/.ssh/config`
+> and Xshell backups. Port forwarding and snippets are next. See
 > [the roadmap](#roadmap).
 
 ## Requirements
@@ -140,11 +141,24 @@ local shell shows the pane empty rather than the last host's listing.
 
 Both panes navigate the same way: double-click a directory, type a path into
 the bar, go up or home, sort by name, size or date, and show hidden files with
-one toggle. Paths come back canonical from the machine that owns them, so `..`
-and symlinked directories resolve to where you actually are.
+one toggle. Right-click for new folder, rename and delete; delete asks first.
 
-This milestone is looking only. Transfers - drag and drop, a queue, resume,
-conflicts - are milestone 6.
+**Copying is dragging.** Drag rows from one pane onto the other - or onto a
+directory in it - and they are queued: a file, or a directory and everything
+under it. Files dragged in from the desktop upload to the remote pane. The
+queue at the foot of the dock shows each transfer's progress; pause and resume
+land within a fraction of a second, cancel works at any point, and two
+transfers run at a time per host so a large file does not starve a small one.
+
+When a file already exists at the destination the transfer **stops to ask**,
+showing both sides' size and date: overwrite, skip, keep both, or - when the
+existing copy is smaller - resume from where it stops, with one answer able to
+cover the rest of the transfer. Time stamps travel with the files.
+
+**Open in editor** downloads a remote file to a private temporary directory,
+opens it with whatever your machine opens that kind of file with, and uploads
+it back on every save. Close the entry in the queue - or the session - and the
+working copy is removed.
 
 ## Themes
 
@@ -211,6 +225,8 @@ src-tauri/src/    Rust core
   session/        session manager, pty, output pump, logging, shell detection
   settings/       settings.json, and the colour schemes imported into it
   files/          directory listings, local and remote, in one shape
+  transfer/       the queue, and the bytes it moves
+  edit.rs         a remote file in a local editor, uploaded on save
   ssh/            connect and auth, channel transport, sftp, known_hosts, agent
   vault/          sqlite host store, os keychain, ssh_config and xshell imports
 docs/             architecture and the IPC contract
@@ -228,7 +244,8 @@ docs/             architecture and the IPC contract
    Windows Terminal colour schemes. *(done)*
 5. **SFTP on the shared connection** - docked file panes, local pane,
    navigation. *(done)*
-6. Transfer engine: queue, resume, conflicts, drag and drop, open-in-editor.
+6. **Transfer engine** - queue, resume, conflicts, drag and drop,
+   open-in-editor. *(done)*
 7. Port forwarding, snippets, follow-cwd.
 8. Packaging: installers, portable mode, encrypted vault export/import. **MVP.**
 9. Triggers and notifications, fleet runner, SFTP extras, sync adapters,

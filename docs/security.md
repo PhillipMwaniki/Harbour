@@ -121,9 +121,17 @@ Implemented:
 - SFTP that rides the terminal's connection. The file pane opens a second
   channel on a session that has already verified its host key and
   authenticated; it never holds a credential, never makes a trust decision,
-  and cannot reach a host the user has not already connected to. In this
-  milestone it is read-only: nothing it can be asked to do changes either
-  file system.
+  and cannot reach a host the user has not already connected to.
+- Transfers and file operations ride the same channel, with the same trust.
+  Everything that changes a file system is a named operation the user asked
+  for: a drop, a menu item, a confirmed delete. A transfer never overwrites
+  without either a policy the user set for it or an answer to a prompt that
+  showed both sides, and never deletes anything.
+- Open-in-editor keeps its working copies under the platform temporary
+  directory, one private directory per edit, removed when the edit or its
+  session closes. The copy is plaintext with whatever the remote file held,
+  for as long as the editor is open on it - the same exposure as saving the
+  file locally, which is what it is.
 - A settings file that holds no secrets of any kind - theme, font, keymap,
   highlight rules, per-host themes, where logs go - and that is treated as
   untrusted input on the way in: a malformed one is moved aside and replaced
