@@ -358,6 +358,90 @@ export interface DirListing {
   entries: FileEntry[];
 }
 
+// ---------------------------------------------------------------------------
+// Transfers
+// ---------------------------------------------------------------------------
+
+export type Direction = "upload" | "download";
+
+/** What to do when a file already exists at the destination. */
+export type ConflictPolicy = "ask" | "overwrite" | "skip" | "resume" | "rename";
+
+/** The answer to one conflict. */
+export type Resolution = "overwrite" | "skip" | "resume" | "rename" | "cancel";
+
+export type TransferState =
+  | "queued"
+  | "running"
+  | "paused"
+  | "conflict"
+  | "done"
+  | "skipped"
+  | "cancelled"
+  | "failed";
+
+export const FINISHED_STATES: ReadonlySet<TransferState> = new Set([
+  "done",
+  "skipped",
+  "cancelled",
+  "failed",
+]);
+
+/** Everything the conflict prompt shows for one file. */
+export interface ConflictInfo {
+  /** The destination that already exists. */
+  path: string;
+  sourceSize: number;
+  sourceModified: number | null;
+  destinationSize: number;
+  destinationModified: number | null;
+  /** The destination is smaller than the source, so resuming means something. */
+  resumable: boolean;
+}
+
+/**
+ * One thing to copy. `destination` is the full target path - for a directory,
+ * the directory that will be created.
+ */
+export interface TransferRequest {
+  direction: Direction;
+  source: string;
+  destination: string;
+}
+
+/** A transfer as the backend reports it: the whole state, on every change. */
+export interface Transfer {
+  id: string;
+  sessionId: string;
+  direction: Direction;
+  source: string;
+  destination: string;
+  state: TransferState;
+  conflict: ConflictInfo | null;
+  bytesDone: number;
+  /** Zero until the transfer has been planned. */
+  bytesTotal: number;
+  filesDone: number;
+  filesTotal: number;
+  currentFile: string | null;
+  error: string | null;
+  /** Seconds since the epoch. */
+  queuedAt: number;
+}
+
+/** A remote file open in a local editor, uploaded back on every save. */
+export interface EditInfo {
+  id: string;
+  sessionId: string;
+  remotePath: string;
+  localPath: string;
+  uploads: number;
+  lastUpload: number | null;
+  /** The last upload failed; the local copy still has the work. */
+  error: string | null;
+  closed: boolean;
+}
+
 /** Stable error codes; see `AppError::code` on the Rust side. */
 export type AppErrorCode =
   | "SESSION_NOT_FOUND"
@@ -383,6 +467,9 @@ export type AppErrorCode =
   | "HIGHLIGHT_IMPORT_FAILED"
   | "SFTP_ERROR"
   | "FILES_ERROR"
+  | "TRANSFER_ERROR"
+  | "TRANSFER_NOT_FOUND"
+  | "EDIT_ERROR"
   | "LOG_FAILED"
   | "PROMPT_NOT_FOUND"
   | "PROMPT_TIMED_OUT"

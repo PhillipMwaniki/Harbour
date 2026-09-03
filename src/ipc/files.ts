@@ -42,3 +42,32 @@ export function localRoots(): Promise<string[]> {
 export function localList(path: string): Promise<DirListing> {
   return invoke<DirListing>("local_list", { path });
 }
+
+// ---------------------------------------------------------------------------
+// Making, renaming and removing
+// ---------------------------------------------------------------------------
+
+export function sftpMkdir(sessionId: string, path: string): Promise<void> {
+  return invoke("sftp_mkdir", { sessionId, path });
+}
+
+export function sftpRename(sessionId: string, from: string, to: string): Promise<void> {
+  return invoke("sftp_rename", { sessionId, from, to });
+}
+
+/** `recursive` is required to remove a directory with anything in it. */
+export function sftpRemove(sessionId: string, path: string, recursive: boolean): Promise<void> {
+  return invoke("sftp_remove", { sessionId, path, recursive });
+}
+
+export function localMkdir(path: string): Promise<void> {
+  return invoke("local_mkdir", { path });
+}
+
+export function localRename(from: string, to: string): Promise<void> {
+  return invoke("local_rename", { from, to });
+}
+
+export function localRemove(path: string, recursive: boolean): Promise<void> {
+  return invoke("local_remove", { path, recursive });
+}
