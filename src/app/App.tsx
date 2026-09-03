@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { FileDock } from "@/components/files/FileDock";
+import { ForwardPanel } from "@/components/forward/ForwardPanel";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { ConnectDialog, type ConnectRequest } from "@/components/ssh/ConnectDialog";
 import { HostKeyDialog } from "@/components/ssh/HostKeyDialog";
@@ -13,6 +14,7 @@ import { ImportDialog, type ImportSource } from "@/components/vault/ImportDialog
 import { SessionTree } from "@/components/vault/SessionTree";
 import { onSessionClosed, sessionClose, shellList } from "@/ipc/session";
 import { connectionRespond, onHostKeyPrompt, onSecretPrompt } from "@/ipc/ssh";
+import { onForwardUpdate } from "@/ipc/forward";
 import { onEditUpdate, onTransferUpdate } from "@/ipc/transfer";
 import {
   createHost,
@@ -39,6 +41,7 @@ import type { SplitDirection } from "@/lib/panes";
 import { toggleLog } from "@/lib/sessionLog";
 import { activePrompt, usePrompts } from "@/stores/prompts";
 import { useFiles } from "@/stores/files";
+import { useForwards } from "@/stores/forwards";
 import { useTransfers } from "@/stores/transfers";
 import { activePane, focusedPane, paneForSession, useSessions, type Pane } from "@/stores/sessions";
 import { applyThemeVariables, useSettings, useTerminalTheme } from "@/stores/settings";
@@ -61,6 +64,7 @@ export default function App() {
   const vaultError = useVault((state) => state.error);
   const keymap = useSettings((state) => state.settings.keymap);
   const filesOpen = useFiles((state) => state.open);
+  const forwardsOpen = useForwards((state) => state.open);
   const theme = useTerminalTheme();
   const [banner, setBanner] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>({ kind: "none" });
@@ -113,6 +117,7 @@ export default function App() {
       await useSettings.getState().load();
       // Transfers queued before a reload, if any, are still running.
       void useTransfers.getState().load();
+      void useForwards.getState().load();
       try {
         useSessions.getState().setShells(await shellList());
       } catch (err) {
@@ -148,6 +153,7 @@ export default function App() {
       // Its remote listing goes with it; the pane must not keep showing a
       // server that is no longer connected.
       useFiles.getState().forget(event.sessionId);
+      useForwards.getState().forget(event.sessionId);
       if (!lost) state.closePane(found.tab.tabId, found.pane.paneId);
     });
     return () => {
@@ -173,6 +179,7 @@ export default function App() {
     const listeners = [
       onTransferUpdate((transfer) => useTransfers.getState().apply(transfer)),
       onEditUpdate((edit) => useTransfers.getState().applyEdit(edit)),
+      onForwardUpdate((forward) => useForwards.getState().apply(forward)),
     ];
     return () => {
       for (const listener of listeners) void listener.then((fn) => fn());
@@ -292,6 +299,9 @@ export default function App() {
         case "files.toggle":
           useFiles.getState().toggle();
           return;
+        case "forwards.toggle":
+          useForwards.getState().toggle();
+          return;
         case "search.open":
           paneHandle(focused?.pane.paneId)?.openSearch();
           return;
@@ -363,9 +373,11 @@ export default function App() {
         onSplit={splitFocused}
         onToggleSessions={() => setSidebar((open) => !open)}
         onToggleFiles={() => useFiles.getState().toggle()}
+        onToggleForwards={() => useForwards.getState().toggle()}
         onSettings={() => setModal({ kind: "settings" })}
         sessionsOpen={sidebar}
         filesOpen={filesOpen}
+        forwardsOpen={forwardsOpen}
       />
 
       {(banner ?? vaultError) && (
@@ -540,6 +552,14 @@ export default function App() {
             sessionId={remoteSession}
             sessionTitle={remoteSession && focusedTerminal ? focusedTerminal.title : null}
             onClose={() => useFiles.getState().setOpen(false)}
+          />
+        )}
+
+        {forwardsOpen && (
+          <ForwardPanel
+            sessionId={remoteSession}
+            sessionTitle={remoteSession && focusedTerminal ? focusedTerminal.title : null}
+            onClose={() => useForwards.getState().setOpen(false)}
           />
         )}
       </div>

@@ -16,8 +16,10 @@ interface Props {
   onToggleSessions: () => void;
   onSettings: () => void;
   onToggleFiles: () => void;
+  onToggleForwards: () => void;
   sessionsOpen: boolean;
   filesOpen: boolean;
+  forwardsOpen: boolean;
 }
 
 /** What the hover tooltip says, which is where a dead pane explains itself. */
@@ -45,8 +47,10 @@ export function TabBar({
   onToggleSessions,
   onSettings,
   onToggleFiles,
+  onToggleForwards,
   sessionsOpen,
   filesOpen,
+  forwardsOpen,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -215,6 +219,17 @@ export function TabBar({
         onClick={onToggleFiles}
       >
         Files
+      </button>
+
+      <button
+        type="button"
+        aria-label="Toggle port forwards"
+        aria-pressed={forwardsOpen}
+        title="Port forwards (Ctrl+Shift+P)"
+        className="border-l border-[var(--hb-border)] px-3 text-xs hover:bg-[var(--hb-hover)]"
+        onClick={onToggleForwards}
+      >
+        Forwards
       </button>
 
       <ThemePicker />
