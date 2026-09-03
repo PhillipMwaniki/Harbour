@@ -13,6 +13,7 @@ import { ImportDialog, type ImportSource } from "@/components/vault/ImportDialog
 import { SessionTree } from "@/components/vault/SessionTree";
 import { onSessionClosed, sessionClose, shellList } from "@/ipc/session";
 import { connectionRespond, onHostKeyPrompt, onSecretPrompt } from "@/ipc/ssh";
+import { onEditUpdate, onTransferUpdate } from "@/ipc/transfer";
 import {
   createHost,
   deleteHost,
@@ -38,6 +39,7 @@ import type { SplitDirection } from "@/lib/panes";
 import { toggleLog } from "@/lib/sessionLog";
 import { activePrompt, usePrompts } from "@/stores/prompts";
 import { useFiles } from "@/stores/files";
+import { useTransfers } from "@/stores/transfers";
 import { activePane, focusedPane, paneForSession, useSessions, type Pane } from "@/stores/sessions";
 import { applyThemeVariables, useSettings, useTerminalTheme } from "@/stores/settings";
 import { selectedHost, useVault } from "@/stores/vault";
@@ -109,6 +111,8 @@ export default function App() {
       // Settings first: the terminal is built with the font and scrollback
       // from them, and rebuilding it afterwards would lose its session.
       await useSettings.getState().load();
+      // Transfers queued before a reload, if any, are still running.
+      void useTransfers.getState().load();
       try {
         useSessions.getState().setShells(await shellList());
       } catch (err) {
@@ -157,6 +161,18 @@ export default function App() {
     const listeners = [
       onHostKeyPrompt((prompt) => usePrompts.getState().push({ type: "hostKey", prompt })),
       onSecretPrompt((prompt) => usePrompts.getState().push({ type: "secret", prompt })),
+    ];
+    return () => {
+      for (const listener of listeners) void listener.then((fn) => fn());
+    };
+  }, []);
+
+  // Every change to a transfer or an edit arrives as the whole object. The
+  // store keeps the latest copy; the dock renders whatever it holds.
+  useEffect(() => {
+    const listeners = [
+      onTransferUpdate((transfer) => useTransfers.getState().apply(transfer)),
+      onEditUpdate((edit) => useTransfers.getState().applyEdit(edit)),
     ];
     return () => {
       for (const listener of listeners) void listener.then((fn) => fn());
