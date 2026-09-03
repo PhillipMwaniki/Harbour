@@ -165,6 +165,36 @@ impl KnownHosts {
     }
 }
 
+/// Parses a public key as Xshell stores host keys: RFC 4716, the
+/// `---- BEGIN SSH2 PUBLIC KEY ----` form. An OpenSSH one-liner is accepted
+/// too, since that is what everything else writes.
+pub fn parse_public_key(text: &str) -> Result<PublicKey, String> {
+    let trimmed = text.trim_start_matches('\u{feff}').trim();
+    if !trimmed.starts_with("----") {
+        return PublicKey::from_openssh(trimmed).map_err(|err| err.to_string());
+    }
+
+    let mut body = String::new();
+    let mut in_header = false;
+    for line in trimmed.lines().map(str::trim) {
+        if line.starts_with("----") || line.is_empty() {
+            continue;
+        }
+        // Headers are `Tag: value`, continued onto the next line by a
+        // trailing backslash. Base64 never contains a colon.
+        if in_header || line.contains(':') {
+            in_header = line.ends_with('\\');
+            continue;
+        }
+        body.push_str(line);
+    }
+
+    let blob = BASE64
+        .decode(body.as_bytes())
+        .map_err(|err| format!("the key body is not base64: {err}"))?;
+    PublicKey::from_bytes(&blob).map_err(|err| err.to_string())
+}
+
 /// `SHA256:...`, matching what `ssh-keygen -l` prints.
 pub fn fingerprint(key: &PublicKey) -> String {
     key.fingerprint(HashAlg::Sha256).to_string()
@@ -444,5 +474,55 @@ mod tests {
             reread.verify("example.com", 2222, &key(KEY_A)),
             Verdict::Trusted
         );
+    }
+}
+
+#[cfg(test)]
+mod rfc4716_tests {
+    use super::*;
+
+    fn key() -> PublicKey {
+        russh::keys::ssh_key::public::Ed25519PublicKey([7u8; 32]).into()
+    }
+
+    /// Wraps a key the way Xshell writes `key_<host>_<port>.pub`.
+    fn rfc4716(key: &PublicKey, header: bool) -> String {
+        let body = BASE64.encode(&key.to_bytes().unwrap());
+        let mut out = String::from("---- BEGIN SSH2 PUBLIC KEY ----\n");
+        if header {
+            out.push_str(
+                "Comment: \"2048-bit RSA, converted by someone@host from \\\n OpenSSH\"\n",
+            );
+        }
+        for chunk in body.as_bytes().chunks(70) {
+            out.push_str(std::str::from_utf8(chunk).unwrap());
+            out.push('\n');
+        }
+        out.push_str("---- END SSH2 PUBLIC KEY ----\n");
+        out
+    }
+
+    #[test]
+    fn reads_the_ssh2_form_with_and_without_headers() {
+        assert_eq!(parse_public_key(&rfc4716(&key(), false)).unwrap(), key());
+        // A continued header line must not be mistaken for key material.
+        assert_eq!(parse_public_key(&rfc4716(&key(), true)).unwrap(), key());
+    }
+
+    #[test]
+    fn reads_an_openssh_one_liner_and_a_bom() {
+        let line = key().to_openssh().unwrap();
+        assert_eq!(parse_public_key(&line).unwrap(), key());
+        assert_eq!(parse_public_key(&format!("\u{feff}{line}")).unwrap(), key());
+    }
+
+    #[test]
+    fn rejects_what_is_not_a_key() {
+        assert!(parse_public_key(
+            "---- BEGIN SSH2 PUBLIC KEY ----\n!!!\n---- END SSH2 PUBLIC KEY ----"
+        )
+        .is_err());
+        assert!(parse_public_key("not a key").is_err());
+        assert!(parse_public_key("").is_err());
     }
 }

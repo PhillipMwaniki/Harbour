@@ -473,9 +473,12 @@ export default function App() {
             <ImportDialog
               source={modal.source}
               onCancel={() => setModal({ kind: "none" })}
-              onDone={(imported) => {
+              onDone={(hosts, hostKeys) => {
                 setModal({ kind: "none" });
-                setBanner(imported > 0 ? `Imported ${imported} host${imported === 1 ? "" : "s"}.` : null);
+                const parts = [];
+                if (hosts > 0) parts.push(`${hosts} host${hosts === 1 ? "" : "s"}`);
+                if (hostKeys > 0) parts.push(`${hostKeys} host key${hostKeys === 1 ? "" : "s"}`);
+                setBanner(parts.length > 0 ? `Imported ${parts.join(" and ")}.` : null);
                 void useVault.getState().refresh();
               }}
             />

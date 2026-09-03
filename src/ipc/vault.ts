@@ -4,6 +4,7 @@ import type {
   Folder,
   Host,
   HostInput,
+  HostKeyCandidate,
   ImportCandidate,
   ImportPreview,
   ImportResult,
@@ -71,20 +72,25 @@ export function previewSshConfig(path?: string): Promise<ImportPreview> {
   return invoke<ImportPreview>("vault_preview_ssh_config", { path: path ?? null });
 }
 
-/** Walks an Xshell export directory. Writes nothing. */
+/**
+ * Walks an Xshell export directory, or reads a `.xts` backup - which also
+ * yields the host keys Xshell had accepted. Writes nothing.
+ */
 export function previewXshell(path: string): Promise<ImportPreview> {
   return invoke<ImportPreview>("vault_preview_xshell", { path });
 }
 
 /**
- * Writes the reviewed candidates. `username` fills in for entries whose source
- * did not name one; without it those are skipped rather than guessed at.
+ * Writes the reviewed candidates, and the reviewed host keys into Harbour's
+ * own `known_hosts`. `username` fills in for entries whose source did not name
+ * one; without it those are skipped rather than guessed at.
  */
 export function applyImport(
   candidates: ImportCandidate[],
   username: string | null,
+  hostKeys: HostKeyCandidate[] = [],
 ): Promise<ImportResult> {
-  return invoke<ImportResult>("vault_apply_import", { candidates, username });
+  return invoke<ImportResult>("vault_apply_import", { candidates, username, hostKeys });
 }
 
 // ---------------------------------------------------------------------------

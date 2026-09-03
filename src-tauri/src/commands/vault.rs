@@ -15,10 +15,11 @@ use crate::session::manager::{self, NewSession};
 use crate::session::{SessionClosed, SessionInfo, SessionKind};
 use crate::ssh::client::{self, ConnectRequest};
 use crate::ssh::{Asker, HostKeyAnswer, HostKeyQuestion, SecretAnswer, SecretKind, SecretQuestion};
-use crate::vault::import::{self, Applied, Candidate, Preview};
+use crate::vault::import::{self, Applied, Candidate, HostKeyCandidate, Preview};
 use crate::vault::model::{Folder, FolderId, Host, HostId, HostInput, VaultTree};
 use crate::vault::secrets::{self, SecretSlot};
 use crate::vault::{ssh_config, xshell};
+use crate::xts;
 use crate::AppState;
 
 /// Runs a blocking vault operation off the async runtime.
@@ -182,28 +183,52 @@ pub async fn vault_preview_ssh_config(path: Option<String>) -> AppResult<Preview
     .await
 }
 
-/// Walks an Xshell export directory. Also writes nothing.
+/// Walks an Xshell export directory, or reads a `.xts` backup. Also writes
+/// nothing. A backup also yields the host keys Xshell had accepted, each
+/// checked against what Harbour already trusts so the review can say which
+/// are new.
 #[tauri::command]
-pub async fn vault_preview_xshell(path: String) -> AppResult<Preview> {
+pub async fn vault_preview_xshell(state: State<'_, AppState>, path: String) -> AppResult<Preview> {
+    let known = Arc::clone(&state.known_hosts);
     blocking(move || {
         let root = PathBuf::from(&path);
-        let report = xshell::import_tree(&root).map_err(|err| {
-            AppError::Vault(format!("could not read the export at {path}: {err}"))
-        })?;
+        let unreadable =
+            |err: std::io::Error| AppError::Vault(format!("could not read {path}: {err}"));
+
+        if xts::Archive::is_archive(&root) {
+            let mut archive = xts::Archive::open(&root).map_err(unreadable)?;
+            let report = xshell::import_archive(&mut archive).map_err(unreadable)?;
+            let keys = archive.host_keys().map_err(unreadable)?;
+            let mut preview = import::from_xshell(report, path.clone());
+            let (candidates, notes) = import::host_key_candidates(keys, &known);
+            preview.host_keys = candidates;
+            preview.notes.extend(notes);
+            return Ok(preview);
+        }
+
+        let report = xshell::import_tree(&root).map_err(unreadable)?;
         Ok(import::from_xshell(report, path))
     })
     .await
 }
 
-/// Writes the reviewed candidates into the vault.
+/// Writes the reviewed candidates into the vault, and the reviewed host keys
+/// into Harbour's `known_hosts`.
 #[tauri::command]
 pub async fn vault_apply_import(
     state: State<'_, AppState>,
     candidates: Vec<Candidate>,
     username: Option<String>,
+    host_keys: Option<Vec<HostKeyCandidate>>,
 ) -> AppResult<Applied> {
     let vault = Arc::clone(&state.vault);
-    blocking(move || import::apply(&vault, &candidates, username.as_deref())).await
+    let known = Arc::clone(&state.known_hosts);
+    blocking(move || {
+        let mut applied = import::apply(&vault, &candidates, username.as_deref())?;
+        applied.host_keys = import::apply_host_keys(&known, &host_keys.unwrap_or_default())?;
+        Ok(applied)
+    })
+    .await
 }
 
 // ---------------------------------------------------------------------------

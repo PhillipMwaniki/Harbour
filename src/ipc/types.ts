@@ -168,16 +168,36 @@ export interface ImportCandidate {
   skipReason: string | null;
 }
 
+/** How a host key from a backup relates to what Harbour already trusts. */
+export type ImportedHostKeyStatus = "new" | "known" | "changed" | "revoked";
+
+/** A host key an Xshell backup carried, offered for review. */
+export interface HostKeyCandidate {
+  host: string;
+  port: number;
+  algorithm: string;
+  /** `SHA256:...`, as the host key prompt shows it. */
+  fingerprint: string;
+  /** The key in OpenSSH one-line form. A public key is not a secret. */
+  key: string;
+  /** Only `new` keys are ever written; the rest are shown so nothing vanishes. */
+  status: ImportedHostKeyStatus;
+}
+
 export interface ImportPreview {
   candidates: ImportCandidate[];
   /** Anything the user should know that is not about one host. */
   notes: string[];
   source: string;
+  /** Host keys a `.xts` backup carried. Empty for the other sources. */
+  hostKeys: HostKeyCandidate[];
 }
 
 export interface ImportResult {
   hosts: number;
   skipped: number;
+  /** Host keys written to Harbour's `known_hosts`. */
+  hostKeys: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +305,14 @@ export interface SchemeImport {
   notes: string[];
 }
 
+/** What an Xshell highlight set import found. Nothing is saved until the user says. */
+export interface HighlightImport {
+  source: string;
+  rules: HighlightRule[];
+  /** Rules or files that were not brought across, and why. */
+  notes: string[];
+}
+
 /** A session's log, as the backend sees it. */
 export interface LogStatus {
   active: boolean;
@@ -317,6 +345,7 @@ export type AppErrorCode =
   | "KEYRING_UNAVAILABLE"
   | "SETTINGS_ERROR"
   | "SCHEME_IMPORT_FAILED"
+  | "HIGHLIGHT_IMPORT_FAILED"
   | "LOG_FAILED"
   | "PROMPT_NOT_FOUND"
   | "PROMPT_TIMED_OUT"

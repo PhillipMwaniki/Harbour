@@ -8,10 +8,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppResult;
+use crate::ssh::known_hosts::{self, KnownHosts, Verdict};
 use crate::vault::model::{HostAuth, HostInput};
 use crate::vault::ssh_config::ConfigImport;
 use crate::vault::store::Vault;
 use crate::vault::xshell::{ImportReport, Protocol};
+use crate::xts;
 
 /// One host an import found, and whether it can be brought across.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +43,87 @@ impl Candidate {
     }
 }
 
+/// How a host key from a backup relates to what Harbour already trusts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostKeyStatus {
+    /// Nothing on file for this host and algorithm: importing it saves a
+    /// trust-on-first-use prompt later.
+    New,
+    /// Already trusted, so there is nothing to do.
+    Known,
+    /// A *different* key of the same algorithm is on file. This is the case
+    /// the connect-time prompt defaults to rejecting, and an import must not
+    /// be a quieter way past it.
+    Changed,
+    /// Explicitly revoked here. Never importable.
+    Revoked,
+}
+
+/// A host key an Xshell backup carried, ready for review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostKeyCandidate {
+    pub host: String,
+    pub port: u16,
+    pub algorithm: String,
+    /// `SHA256:...`, as the host key prompt shows it.
+    pub fingerprint: String,
+    /// The key in OpenSSH one-line form, so applying needs no second read of
+    /// the archive. A public key is not a secret.
+    pub key: String,
+    pub status: HostKeyStatus,
+}
+
+impl HostKeyCandidate {
+    /// Only a key nobody has an opinion about yet may be written.
+    pub fn importable(&self) -> bool {
+        self.status == HostKeyStatus::New
+    }
+}
+
+/// Classifies the host keys out of a backup against Harbour's store.
+pub fn host_key_candidates(
+    found: xts::Found<xts::HostKeyFile>,
+    known: &KnownHosts,
+) -> (Vec<HostKeyCandidate>, Vec<String>) {
+    let mut candidates = Vec::new();
+    let mut notes = found.notes;
+
+    for file in found.files {
+        let key = match known_hosts::parse_public_key(&file.text) {
+            Ok(key) => key,
+            Err(reason) => {
+                notes.push(format!("key_{}_{}.pub: {reason}", file.host, file.port));
+                continue;
+            }
+        };
+        let status = match known.verify(&file.host, file.port, &key) {
+            Verdict::Trusted => HostKeyStatus::Known,
+            Verdict::Unknown { .. } => HostKeyStatus::New,
+            Verdict::Changed { .. } => HostKeyStatus::Changed,
+            Verdict::Revoked => HostKeyStatus::Revoked,
+        };
+        let Ok(encoded) = key.to_openssh() else {
+            notes.push(format!(
+                "key_{}_{}.pub: the key could not be re-encoded",
+                file.host, file.port
+            ));
+            continue;
+        };
+        candidates.push(HostKeyCandidate {
+            host: file.host,
+            port: file.port,
+            algorithm: key.algorithm().to_string(),
+            fingerprint: known_hosts::fingerprint(&key),
+            key: encoded,
+            status,
+        });
+    }
+
+    (candidates, notes)
+}
+
 /// What an import found, ready for review.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +134,10 @@ pub struct Preview {
     pub notes: Vec<String>,
     /// Where this was read from, for the dialog's heading.
     pub source: String,
+    /// Host keys a `.xts` backup carried, for the same review. Empty for the
+    /// other sources.
+    #[serde(default)]
+    pub host_keys: Vec<HostKeyCandidate>,
 }
 
 /// Reads `~/.ssh/config`.
@@ -80,6 +167,7 @@ pub fn from_ssh_config(import: ConfigImport, source: String) -> Preview {
         candidates,
         notes: import.notes,
         source,
+        host_keys: Vec::new(),
     }
 }
 
@@ -122,6 +210,7 @@ pub fn from_xshell(report: ImportReport, source: String) -> Preview {
         candidates,
         notes,
         source,
+        host_keys: Vec::new(),
     }
 }
 
@@ -131,6 +220,8 @@ pub fn from_xshell(report: ImportReport, source: String) -> Preview {
 pub struct Applied {
     pub hosts: usize,
     pub skipped: usize,
+    /// Host keys written to Harbour's `known_hosts`.
+    pub host_keys: usize,
 }
 
 /// Writes the chosen candidates into the vault, creating folders as needed.
@@ -184,6 +275,34 @@ pub fn apply(
     }
 
     Ok(applied)
+}
+
+/// Appends the chosen host keys to Harbour's own `known_hosts`.
+///
+/// Only keys with nothing on file are written, whatever the caller ticked: a
+/// key that would replace a trusted one goes through the connect-time prompt,
+/// with both fingerprints in front of the user, or not at all.
+pub fn apply_host_keys(known: &KnownHosts, keys: &[HostKeyCandidate]) -> AppResult<usize> {
+    let mut written = 0;
+    for candidate in keys.iter().filter(|candidate| candidate.importable()) {
+        let key = known_hosts::parse_public_key(&candidate.key).map_err(|reason| {
+            crate::error::AppError::Vault(format!(
+                "host key for {}:{} is not valid: {reason}",
+                candidate.host, candidate.port
+            ))
+        })?;
+        // The status was computed at preview time; check again so two
+        // reviews of the same backup cannot double up a line.
+        if !matches!(
+            known.verify(&candidate.host, candidate.port, &key),
+            Verdict::Unknown { .. }
+        ) {
+            continue;
+        }
+        known.learn(&candidate.host, candidate.port, &key)?;
+        written += 1;
+    }
+    Ok(written)
 }
 
 #[cfg(test)]
@@ -345,6 +464,116 @@ mod tests {
         assert_eq!(applied.hosts, 1);
         assert_eq!(applied.skipped, 1);
         assert_eq!(vault.tree().unwrap().hosts[0].name, "web");
+    }
+
+    fn test_key(seed: u8) -> russh::keys::PublicKey {
+        russh::keys::ssh_key::public::Ed25519PublicKey([seed; 32]).into()
+    }
+
+    fn store() -> (KnownHosts, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("harbour-import-kh-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Harbour's own file is both read and written here, as it is in the
+        // app: what `learn` appends has to count on the next `verify`.
+        let path = dir.join("known_hosts");
+        (KnownHosts::with_paths(vec![path.clone()], path), dir)
+    }
+
+    fn found(entries: &[(&str, u16, &russh::keys::PublicKey)]) -> xts::Found<xts::HostKeyFile> {
+        xts::Found {
+            files: entries
+                .iter()
+                .map(|(host, port, key)| xts::HostKeyFile {
+                    host: host.to_string(),
+                    port: *port,
+                    text: key.to_openssh().unwrap(),
+                })
+                .collect(),
+            notes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn host_keys_are_classified_against_the_store() {
+        let (known, dir) = store();
+        let trusted = test_key(1);
+        known.learn("web.example.com", 22, &trusted).unwrap();
+
+        let (candidates, notes) = host_key_candidates(
+            found(&[
+                ("web.example.com", 22, &trusted),
+                ("web.example.com", 2222, &trusted),
+                ("db.example.com", 22, &test_key(2)),
+                ("web.example.com", 22, &test_key(3)),
+            ]),
+            &known,
+        );
+        std::fs::remove_dir_all(dir).ok();
+
+        assert!(notes.is_empty(), "{notes:?}");
+        let statuses: Vec<_> = candidates.iter().map(|c| c.status).collect();
+        assert_eq!(
+            statuses,
+            [
+                HostKeyStatus::Known,
+                // A different port is a different host as far as trust goes.
+                HostKeyStatus::New,
+                HostKeyStatus::New,
+                HostKeyStatus::Changed,
+            ]
+        );
+        assert_eq!(candidates[0].algorithm, "ssh-ed25519");
+        assert!(candidates[0].fingerprint.starts_with("SHA256:"));
+    }
+
+    #[test]
+    fn a_key_that_will_not_parse_becomes_a_note() {
+        let (known, dir) = store();
+        let mut files = found(&[("web", 22, &test_key(1))]);
+        files.files[0].text =
+            "---- BEGIN SSH2 PUBLIC KEY ----\nnot base64!!\n---- END SSH2 PUBLIC KEY ----\n".into();
+
+        let (candidates, notes) = host_key_candidates(files, &known);
+        std::fs::remove_dir_all(dir).ok();
+
+        assert!(candidates.is_empty());
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].starts_with("key_web_22.pub:"));
+    }
+
+    /// Only new keys are written. A changed key ticked in a hurry must not
+    /// become a second trusted line for the host.
+    #[test]
+    fn applying_writes_new_keys_and_nothing_else() {
+        let (known, dir) = store();
+        let trusted = test_key(1);
+        known.learn("web.example.com", 22, &trusted).unwrap();
+
+        let (candidates, _) = host_key_candidates(
+            found(&[
+                ("web.example.com", 22, &trusted),
+                ("db.example.com", 22, &test_key(2)),
+                ("web.example.com", 22, &test_key(3)),
+            ]),
+            &known,
+        );
+
+        let written = apply_host_keys(&known, &candidates).unwrap();
+        assert_eq!(written, 1);
+        assert_eq!(
+            known.verify("db.example.com", 22, &test_key(2)),
+            Verdict::Trusted
+        );
+        assert!(matches!(
+            known.verify("web.example.com", 22, &test_key(3)),
+            Verdict::Changed { .. }
+        ));
+
+        // Applying the same review twice does not duplicate the line.
+        assert_eq!(apply_host_keys(&known, &candidates).unwrap(), 0);
+        let file = std::fs::read_to_string(known.write_path()).unwrap();
+        assert_eq!(file.lines().count(), 2);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// Importing the same export twice should not multiply the folder tree.
