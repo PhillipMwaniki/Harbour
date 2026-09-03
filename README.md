@@ -246,7 +246,8 @@ docs/             architecture and the IPC contract
    navigation. *(done)*
 6. **Transfer engine** - queue, resume, conflicts, drag and drop,
    open-in-editor. *(done)*
-7. Port forwarding, snippets, follow-cwd.
+7. Port forwarding, jump hosts (`ProxyJump`, including chains, with the
+   `~/.ssh/config` importer reading them), snippets, follow-cwd.
 8. Packaging: installers, portable mode, encrypted vault export/import. **MVP.**
 9. Triggers and notifications, fleet runner, SFTP extras, sync adapters,
    serial and telnet, auto-update, E2E tests.
