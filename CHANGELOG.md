@@ -7,6 +7,11 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Added
 
+- Linux beyond Ubuntu. The `.rpm` now names its dependencies, CI installs the
+  `.rpm` on Fedora and the `.deb` on Debian stable after every build, and two
+  Arch packages - `harbour-bin` from the release's `.deb` and `harbour` from
+  source - are built from the checkout in CI and published to the AUR when a
+  release is published.
 - A release pipeline. Pushing a `vX.Y.Z` tag builds installers for Windows,
   macOS (Apple silicon and Intel) and Linux, attaches them and a `SHA256SUMS`
   file to a draft GitHub release with the changelog entry as its body, and

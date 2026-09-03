@@ -62,7 +62,47 @@ own.
 | `checksums` | Downloads everything on the draft and attaches `SHA256SUMS`. Runs even if a platform failed, over whatever did upload. |
 
 Installers produced: `.msi` and NSIS `.exe` on Windows; `.dmg` and `.app` on
-macOS, one per architecture; `.deb`, `.rpm` and `.AppImage` on Linux.
+macOS, one per architecture; `.deb`, `.rpm` and `.AppImage` on Linux, plus the
+two Arch packages below once the release is published.
+
+## Linux
+
+Ubuntu builds the Linux installers, but Ubuntu is not where most of them are
+installed, so CI installs what it built where it will be used:
+
+| Job | What it proves |
+| --- | --- |
+| Install on Fedora (rpm) | `dnf install` of the `.rpm` resolves its dependencies on current Fedora |
+| Install on Debian (deb) | `apt-get install` of the `.deb` resolves on Debian stable, not only Ubuntu |
+| Arch package (from source) | `packaging/aur/harbour/PKGBUILD` builds and installs from this checkout with `makepkg` |
+
+The `.deb` works out its own dependencies from what the binary links. The
+`.rpm` cannot, so they are named in `tauri.conf.json` under `bundle.linux.rpm`
+- `webkit2gtk4.1`, `gtk3`, `librsvg2` - and the Fedora job is what catches a
+name going stale.
+
+### The AUR
+
+Two packages, both in `packaging/aur`: **`harbour-bin`** repackages the
+release's `.deb`, and **`harbour`** builds from the tagged source. They are
+published by `.github/workflows/aur.yml` when a release is *published* - not
+when the draft is created, because the AUR must never point at installers
+nobody has looked at. The workflow stamps the version and the `.deb` asset
+name into the PKGBUILDs, computes the checksums, test-builds `harbour-bin`,
+and pushes both to `aur.archlinux.org`.
+
+It needs three repository secrets, for an AUR account that owns the packages
+(the first push creates them):
+
+| Secret | Value |
+| --- | --- |
+| `AUR_SSH_PRIVATE_KEY` | A private key whose public half is registered on the AUR account |
+| `AUR_USERNAME` | The account's name, used as the commit author |
+| `AUR_EMAIL` | The account's email |
+
+Without them the workflow prints a notice and does nothing. To publish a
+version that is already on the Releases page - or to retry - run *AUR* from
+the Actions tab with the version.
 
 ## Re-running
 

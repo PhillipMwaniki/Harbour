@@ -54,6 +54,12 @@ Installers for each tagged version are on the
 "unknown publisher" warning, and macOS needs a right-click → Open the first
 time. How a release is cut is in [`docs/releasing.md`](docs/releasing.md).
 
+On Linux, pick the package for your distribution: a `.deb` for Debian and
+Ubuntu, an `.rpm` for Fedora and openSUSE, or the `.AppImage` for anything
+else - CI installs each on the distribution it is for before a release goes
+out. On Arch, `harbour-bin` on the AUR repackages the release and `harbour`
+builds it from source.
+
 ## Connecting over SSH
 
 **Ctrl+Shift+N**, or *SSH connection…* in the tab-bar menu. Give a host, a
