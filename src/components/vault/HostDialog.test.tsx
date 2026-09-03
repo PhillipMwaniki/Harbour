@@ -20,6 +20,7 @@ function existing(overrides: Partial<Host> = {}): Host {
     username: "deploy",
     description: "front end",
     auth: { useAgent: false, keyPath: "~/.ssh/id_ed25519", usePassword: true },
+    jumpHostId: null,
     hasSavedPassword: false,
     position: 0,
     ...overrides,
@@ -33,6 +34,7 @@ function setup(props: Partial<React.ComponentProps<typeof HostDialog>> = {}) {
     <HostDialog
       host={null}
       folders={folders}
+      hosts={[]}
       defaultFolderId={null}
       onSave={onSave}
       onCancel={onCancel}
@@ -59,6 +61,7 @@ describe("HostDialog", () => {
         username: "deploy",
         description: null,
         auth: { useAgent: true, keyPath: null, usePassword: true },
+        jumpHostId: null,
       },
       // No theme override: the host looks like everything else.
       null,
@@ -148,6 +151,7 @@ describe("HostDialog", () => {
       <HostDialog
         host={null}
         folders={folders}
+        hosts={[]}
         defaultFolderId={null}
         onSave={vi.fn()}
         onCancel={vi.fn()}
@@ -162,6 +166,7 @@ describe("HostDialog", () => {
       <HostDialog
         host={existing({ hasSavedPassword: false })}
         folders={folders}
+        hosts={[]}
         defaultFolderId={null}
         onSave={vi.fn()}
         onCancel={vi.fn()}
@@ -174,6 +179,7 @@ describe("HostDialog", () => {
       <HostDialog
         host={existing({ hasSavedPassword: true })}
         folders={folders}
+        hosts={[]}
         defaultFolderId={null}
         onSave={vi.fn()}
         onCancel={vi.fn()}

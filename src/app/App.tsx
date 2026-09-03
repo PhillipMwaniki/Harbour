@@ -482,6 +482,7 @@ export default function App() {
             <HostDialog
               host={modal.host}
               folders={vaultTree.folders}
+              hosts={vaultTree.hosts}
               defaultFolderId={selected?.kind === "folder" ? selected.id : null}
               themeId={modal.host ? (hostThemes[modal.host.id] ?? null) : null}
               onSave={(input, themeId) => void saveHost(input, themeId)}

@@ -128,6 +128,7 @@ pub fn start<H, F>(
     session: Handle<H>,
     channel: Channel<Msg>,
     pending: Vec<u8>,
+    keep_alive: Box<dyn std::any::Any + Send>,
     on_exit: F,
 ) -> Running
 where
@@ -202,6 +203,9 @@ where
         // exactly nothing: when the queue closes, the session goes with it.
         let session = session;
         let write_half = write_half;
+        // Holds the jump-host connections for a tunnelled session; never
+        // touched, only dropped, which tears the chain down with the session.
+        let _keep_alive = keep_alive;
 
         while let Some(command) = command_rx.recv().await {
             let result = match command {

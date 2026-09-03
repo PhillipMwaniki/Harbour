@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::error::{AppError, AppResult};
 use crate::session::manager::{self, NewSession};
 use crate::session::{SessionClosed, SessionInfo, SessionKind};
-use crate::ssh::client::{self, ConnectRequest};
+use crate::ssh::client::{self, DynAsker, Endpoint};
 use crate::ssh::{Asker, HostKeyAnswer, HostKeyQuestion, SecretAnswer, SecretKind, SecretQuestion};
 use crate::vault::import::{self, Applied, Candidate, HostKeyCandidate, Preview};
 use crate::vault::model::{Folder, FolderId, Host, HostId, HostInput, VaultTree};
@@ -252,12 +252,20 @@ pub async fn host_connect(
     let lookup = host_id.clone();
     let host = blocking(move || vault.host(&lookup)).await?;
 
-    let methods = host.auth.methods();
-    if methods.is_empty() {
-        return Err(AppError::Vault(format!(
-            "{} has no authentication method enabled",
-            host.name
-        )));
+    // Follow the jump chain the host sits behind, if any: A -> B -> C means
+    // the terminal reaches A by tunnelling through C then B. Every hop is a
+    // saved host with its own methods and its own keychain secrets.
+    let vault = Arc::clone(&state.vault);
+    let dest_id = host.id.clone();
+    let chain = blocking(move || resolve_chain(&vault, &dest_id)).await?;
+
+    for hop in &chain {
+        if hop.auth.methods().is_empty() {
+            return Err(AppError::Vault(format!(
+                "{} has no authentication method enabled",
+                hop.name
+            )));
+        }
     }
 
     let id = manager::new_id();
@@ -268,23 +276,33 @@ pub async fn host_connect(
     let exit_edits = Arc::clone(&state.edits);
     let exit_app = app.clone();
 
-    let asker = Arc::new(SavedHostAsker {
-        inner: super::ssh::EventAsker::new(app.clone(), Arc::clone(&state.prompts)),
-        host_id: host.id.clone(),
-        vault: Arc::clone(&state.vault),
-        keychain: secrets::available(),
-    });
+    let keychain = secrets::available();
+    let make_asker = |host: &Host| -> Arc<dyn DynAsker> {
+        Arc::new(SavedHostAsker {
+            inner: super::ssh::EventAsker::new(app.clone(), Arc::clone(&state.prompts)),
+            host_id: host.id.clone(),
+            vault: Arc::clone(&state.vault),
+            keychain,
+        })
+    };
+    let endpoint = |host: &Host| Endpoint {
+        target: host.target(),
+        methods: host.auth.methods(),
+        asker: make_asker(host),
+    };
+
+    // `chain` is destination-first; the jumps are everything behind it, dialled
+    // outermost-first (the first TCP hop leads).
+    let dest = endpoint(&host);
+    let jumps: Vec<Endpoint> = chain[1..].iter().rev().map(endpoint).collect();
 
     let title = host.name.clone();
-    let connected = client::connect(
-        ConnectRequest {
-            target: host.target(),
-            methods,
-            cols,
-            rows,
-        },
-        asker,
+    let connected = client::connect_chain(
+        jumps,
+        dest,
         Arc::clone(&state.known_hosts),
+        cols,
+        rows,
         move |reason, code| {
             let closed = SessionClosed::new(exit_id, reason, code);
             exit_manager.remove(&closed.session_id);
@@ -317,6 +335,30 @@ pub async fn host_connect(
 
     let _ = app.emit("session:opened", &info);
     Ok(info)
+}
+
+/// The hosts a connection to `host_id` passes through, destination first.
+///
+/// Follows `jump_host_id` hop by hop. A jump that has been deleted, or a loop,
+/// ends the chain rather than failing the connect: a bastion that is gone
+/// leaves its dependents merely direct, which is the safe direction to err.
+fn resolve_chain(vault: &crate::vault::store::Vault, host_id: &str) -> AppResult<Vec<Host>> {
+    let mut chain = vec![vault.host(host_id)?];
+    let mut seen = std::collections::HashSet::from([host_id.to_string()]);
+    while let Some(jump) = chain.last().and_then(|host| host.jump_host_id.clone()) {
+        if !seen.insert(jump.clone()) {
+            tracing::warn!(host = %host_id, "jump chain loops; stopping");
+            break;
+        }
+        if chain.len() >= 16 {
+            break;
+        }
+        match vault.host(&jump) {
+            Ok(host) => chain.push(host),
+            Err(_) => break,
+        }
+    }
+    Ok(chain)
 }
 
 /// Answers from the keychain where it can, and from the user where it cannot.
@@ -381,7 +423,7 @@ impl SavedHostAsker {
 
 impl Asker for SavedHostAsker {
     async fn host_key(&self, question: HostKeyQuestion) -> AppResult<HostKeyAnswer> {
-        self.inner.host_key(question).await
+        Asker::host_key(&self.inner, question).await
     }
 
     async fn secret(&self, mut question: SecretQuestion) -> AppResult<SecretAnswer> {
@@ -398,7 +440,7 @@ impl Asker for SavedHostAsker {
 
         // Only offer to remember what there is somewhere to remember.
         question.can_remember = self.keychain && slot.is_some();
-        let answer = self.inner.secret(question).await?;
+        let answer = Asker::secret(&self.inner, question).await?;
 
         if let (Some(slot), Some(secret), true) = (slot, answer.secret.as_ref(), answer.remember) {
             self.remember(slot, secret.clone()).await;

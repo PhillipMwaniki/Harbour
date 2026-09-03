@@ -270,6 +270,7 @@ pub fn apply(
                 key_path: candidate.key_path.clone(),
                 use_password: candidate.uses_password,
             },
+            jump_host_id: None,
         })?;
         applied.hosts += 1;
     }

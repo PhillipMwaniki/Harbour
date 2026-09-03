@@ -17,7 +17,7 @@ use crate::vault::model::{Folder, FolderId, Host, HostAuth, HostInput, VaultTree
 
 /// Bumped whenever the schema changes; `migrate` walks from whatever the file
 /// is at up to this.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 pub struct Vault {
     connection: Mutex<Connection>,
@@ -223,8 +223,9 @@ impl Vault {
             .execute(
                 "INSERT INTO hosts (
                      id, folder_id, name, hostname, port, username, description,
-                     use_agent, key_path, use_password, has_saved_password, position
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11)",
+                     use_agent, key_path, use_password, jump_host_id,
+                     has_saved_password, position
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12)",
                 params![
                     id,
                     input.folder_id,
@@ -236,6 +237,7 @@ impl Vault {
                     input.auth.use_agent,
                     input.auth.key_path,
                     input.auth.use_password,
+                    input.jump_host_id,
                     position,
                 ],
             )
@@ -250,6 +252,7 @@ impl Vault {
             username: input.username,
             description: input.description,
             auth: input.auth,
+            jump_host_id: input.jump_host_id,
             has_saved_password: false,
             position,
         })
@@ -267,7 +270,7 @@ impl Vault {
                     "UPDATE hosts SET
                          folder_id = ?2, name = ?3, hostname = ?4, port = ?5,
                          username = ?6, description = ?7, use_agent = ?8,
-                         key_path = ?9, use_password = ?10
+                         key_path = ?9, use_password = ?10, jump_host_id = ?11
                      WHERE id = ?1",
                     params![
                         id,
@@ -280,6 +283,7 @@ impl Vault {
                         input.auth.use_agent,
                         input.auth.key_path,
                         input.auth.use_password,
+                        input.jump_host_id,
                     ],
                 )
                 .map_err(vault_error)?;
@@ -382,6 +386,15 @@ fn migrate(connection: &Connection) -> AppResult<()> {
             .map_err(vault_error)?;
     }
 
+    if version < 2 {
+        // A host may point at another it tunnels through. Self-referential,
+        // so no foreign key: the vault, not SQLite, keeps the graph acyclic,
+        // and a jump host that is deleted simply leaves its dependents direct.
+        connection
+            .execute_batch("ALTER TABLE hosts ADD COLUMN jump_host_id TEXT;")
+            .map_err(vault_error)?;
+    }
+
     connection
         .pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(vault_error)?;
@@ -391,7 +404,7 @@ fn migrate(connection: &Connection) -> AppResult<()> {
 /// Every host read goes through the same column list, so a schema change
 /// cannot leave one query behind.
 const HOST_COLUMNS: &str = "SELECT id, folder_id, name, hostname, port, username, description, \
-                            use_agent, key_path, use_password, has_saved_password, position \
+                            use_agent, key_path, use_password, jump_host_id, \n                            has_saved_password, position \
                             FROM hosts";
 
 fn host_from_row(row: &Row<'_>) -> rusqlite::Result<Host> {
@@ -408,8 +421,9 @@ fn host_from_row(row: &Row<'_>) -> rusqlite::Result<Host> {
             key_path: row.get(8)?,
             use_password: row.get(9)?,
         },
-        has_saved_password: row.get(10)?,
-        position: row.get(11)?,
+        jump_host_id: row.get(10)?,
+        has_saved_password: row.get(11)?,
+        position: row.get(12)?,
     })
 }
 
@@ -533,6 +547,7 @@ mod tests {
             username: "deploy".into(),
             description: None,
             auth: HostAuth::default(),
+            jump_host_id: None,
         }
     }
 
@@ -574,6 +589,7 @@ mod tests {
                     key_path: Some("~/.ssh/id_ed25519".into()),
                     use_password: true,
                 },
+                jump_host_id: None,
             })
             .unwrap();
 
@@ -796,6 +812,64 @@ mod tests {
 
         vault.set_saved_password(&host.id, false).unwrap();
         assert!(!vault.host(&host.id).unwrap().has_saved_password);
+    }
+
+    #[test]
+    fn a_host_can_sit_behind_a_jump_and_it_round_trips() {
+        let vault = vault();
+        let bastion = vault.create_host(host_input("bastion", None)).unwrap();
+        let mut behind = host_input("internal", None);
+        behind.jump_host_id = Some(bastion.id.clone());
+        let internal = vault.create_host(behind).unwrap();
+
+        assert_eq!(internal.jump_host_id.as_deref(), Some(bastion.id.as_str()));
+        assert_eq!(
+            vault.host(&internal.id).unwrap().jump_host_id.as_deref(),
+            Some(bastion.id.as_str())
+        );
+
+        // Clearing it makes the host direct again.
+        let mut direct = host_input("internal", None);
+        direct.jump_host_id = None;
+        let updated = vault.update_host(&internal.id, direct).unwrap();
+        assert_eq!(updated.jump_host_id, None);
+    }
+
+    #[test]
+    fn a_v1_vault_upgrades_and_keeps_its_hosts() {
+        let dir = std::env::temp_dir().join(format!("harbour-vault-mig-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vault.sqlite3");
+
+        // A vault as milestone 3 wrote it: schema 1, no jump_host_id column.
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE folders (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, position INTEGER NOT NULL);
+                 CREATE TABLE hosts (
+                     id TEXT PRIMARY KEY, folder_id TEXT, name TEXT NOT NULL, hostname TEXT NOT NULL,
+                     port INTEGER NOT NULL, username TEXT NOT NULL, description TEXT,
+                     use_agent INTEGER NOT NULL DEFAULT 1, key_path TEXT, use_password INTEGER NOT NULL DEFAULT 1,
+                     has_saved_password INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL);
+                 INSERT INTO hosts (id, name, hostname, port, username, position)
+                 VALUES ('h1', 'web', 'web.example.com', 22, 'deploy', 0);",
+            )
+            .unwrap();
+            c.pragma_update(None, "user_version", 1i64).unwrap();
+        }
+
+        let vault = Vault::open(&path).unwrap();
+        let host = vault.host("h1").unwrap();
+        assert_eq!(host.hostname, "web.example.com");
+        assert_eq!(host.jump_host_id, None, "the new column defaults to null");
+
+        // ...and the upgraded vault can now store a jump.
+        let bastion = vault.create_host(host_input("bastion", None)).unwrap();
+        let mut behind = host_input("via", None);
+        behind.jump_host_id = Some(bastion.id.clone());
+        let via = vault.create_host(behind).unwrap();
+        assert_eq!(via.jump_host_id, Some(bastion.id));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

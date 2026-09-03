@@ -86,6 +86,10 @@ pub struct Host {
     pub username: String,
     pub description: Option<String>,
     pub auth: HostAuth,
+    /// Reach this host by tunnelling through another saved host first - a
+    /// bastion. `None` for a directly reachable host. A chain is these
+    /// pointers followed hop by hop.
+    pub jump_host_id: Option<HostId>,
     /// Whether a password for this host is expected in the OS keychain.
     ///
     /// The keychain is authoritative; this is a cache so the UI can offer
@@ -124,6 +128,8 @@ pub struct HostInput {
     pub description: Option<String>,
     #[serde(default)]
     pub auth: HostAuth,
+    #[serde(default)]
+    pub jump_host_id: Option<HostId>,
 }
 
 impl HostInput {
@@ -148,6 +154,10 @@ impl HostInput {
         if self.port == 0 {
             self.port = 22;
         }
+        self.jump_host_id = self
+            .jump_host_id
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
         self
     }
 }
@@ -215,6 +225,7 @@ mod tests {
             username: " deploy ".into(),
             description: Some("   ".into()),
             auth: HostAuth::default(),
+            jump_host_id: None,
         }
         .normalised();
 
@@ -234,6 +245,7 @@ mod tests {
             username: "deploy".into(),
             description: None,
             auth: HostAuth::default(),
+            jump_host_id: None,
         }
         .normalised();
 

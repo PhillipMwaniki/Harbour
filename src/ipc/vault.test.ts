@@ -17,6 +17,7 @@ function host(id: string, folderId: string | null = null): Host {
     username: "deploy",
     description: null,
     auth: { useAgent: true, keyPath: null, usePassword: true },
+    jumpHostId: null,
     hasSavedPassword: false,
     position: 0,
   };

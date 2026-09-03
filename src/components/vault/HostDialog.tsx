@@ -7,6 +7,8 @@ interface Props {
   /** The host being edited, or `null` when adding a new one. */
   host: Host | null;
   folders: Folder[];
+  /** Other saved hosts, offered as a bastion to tunnel through. */
+  hosts: Host[];
   /** Where a new host lands, when a folder is selected in the tree. */
   defaultFolderId: string | null;
   /** The theme this host overrides the app theme with, if any. */
@@ -30,6 +32,7 @@ const DEFAULT_PORT = 22;
 export function HostDialog({
   host,
   folders,
+  hosts,
   defaultFolderId,
   themeId,
   onSave,
@@ -46,6 +49,7 @@ export function HostDialog({
   const [keyPath, setKeyPath] = useState(host?.auth.keyPath ?? "");
   const [usePassword, setUsePassword] = useState(host?.auth.usePassword ?? true);
   const [themeOverride, setThemeOverride] = useState(themeId ?? "");
+  const [jumpHostId, setJumpHostId] = useState(host?.jumpHostId ?? "");
   const themes = useThemeCatalogue();
   const hostnameRef = useRef<HTMLInputElement | null>(null);
 
@@ -74,6 +78,7 @@ export function HostDialog({
         keyPath: keyPath.trim() || null,
         usePassword,
       },
+      jumpHostId: jumpHostId || null,
     }, themeOverride || null);
   };
 
@@ -156,6 +161,28 @@ export function HostDialog({
                 {folder.name}
               </option>
             ))}
+          </select>
+        </Field>
+
+        <Field
+          label="Jump host"
+          htmlFor="host-jump"
+          hint="optional bastion"
+        >
+          <select
+            id="host-jump"
+            value={jumpHostId}
+            onChange={(event) => setJumpHostId(event.target.value)}
+            className={inputClass}
+          >
+            <option value="">(connect directly)</option>
+            {hosts
+              .filter((candidate) => candidate.id !== host?.id)
+              .map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.name}
+                </option>
+              ))}
           </select>
         </Field>
 

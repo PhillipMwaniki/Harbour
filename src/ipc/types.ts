@@ -133,6 +133,9 @@ export interface Host {
   username: string;
   description: string | null;
   auth: HostAuth;
+  /** Another saved host to tunnel through first - a bastion. `null` for a
+   * directly reachable host. */
+  jumpHostId: string | null;
   /** Whether the OS keychain is expected to hold a password for this host. */
   hasSavedPassword: boolean;
   position: number;
@@ -147,6 +150,7 @@ export interface HostInput {
   username: string;
   description: string | null;
   auth: HostAuth;
+  jumpHostId: string | null;
 }
 
 export interface VaultTree {

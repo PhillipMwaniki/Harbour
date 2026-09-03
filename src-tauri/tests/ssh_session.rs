@@ -6,7 +6,7 @@
 //! verification against a store, authentication, the pty and shell requests,
 //! and bytes travelling in both directions over a live channel.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ use harbour_lib::edit::Editor;
 use harbour_lib::error::AppResult;
 use harbour_lib::files::EntryKind;
 use harbour_lib::session::{ExitReason, Transport};
-use harbour_lib::ssh::client::{self, ConnectRequest};
+use harbour_lib::ssh::client::{self, ConnectRequest, Endpoint};
 use harbour_lib::ssh::known_hosts::KnownHosts;
 use harbour_lib::ssh::sftp;
 use harbour_lib::ssh::{
@@ -56,6 +56,7 @@ enum Seen {
     Pty { term: String, cols: u32, rows: u32 },
     Resize { cols: u32, rows: u32 },
     Input(Vec<u8>),
+    DirectTcpip { host: String, port: u32 },
 }
 
 #[derive(Clone)]
@@ -64,6 +65,9 @@ struct TestServer {
     /// Channels the client opened, kept until a subsystem request says what
     /// they are for. The shell channel never asks, and stays here harmlessly.
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
+    /// Channel ids that are being bridged as a jump; `data()` must not echo
+    /// them, because russh already delivers their bytes to the channel stream.
+    bridged: Arc<Mutex<HashSet<ChannelId>>>,
     /// Served as `/` over SFTP.
     sftp_root: PathBuf,
 }
@@ -168,6 +172,36 @@ impl russh::server::Handler for TestServer {
         session.channel_success(channel)
     }
 
+    /// Acts as a jump host: opens a `direct-tcpip` channel to the address the
+    /// client asked for and copies bytes both ways, so a real SSH session can
+    /// run through it - which is exactly what a bastion does.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let _ = self.seen.send(Seen::DirectTcpip {
+            host: host_to_connect.to_string(),
+            port: port_to_connect,
+        });
+        self.bridged.lock().unwrap().insert(channel.id());
+        reply.accept().await;
+        if let Ok(mut tcp) =
+            tokio::net::TcpStream::connect((host_to_connect, port_to_connect as u16)).await
+        {
+            let mut stream = channel.into_stream();
+            tokio::spawn(async move {
+                let _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
+            });
+        }
+        Ok(())
+    }
+
     /// Echoes input, except `exit`, which ends the shell with [`EXIT_CODE`].
     async fn data(
         &mut self,
@@ -175,6 +209,12 @@ impl russh::server::Handler for TestServer {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        // russh delivers a bridged channel's bytes to its stream and here;
+        // echoing them would interleave with the real forward and desync the
+        // tunnelled session.
+        if self.bridged.lock().unwrap().contains(&channel) {
+            return Ok(());
+        }
         let _ = self.seen.send(Seen::Input(data.to_vec()));
         if data.starts_with(b"exit") {
             session.exit_status_request(channel, EXIT_CODE)?;
@@ -234,6 +274,7 @@ async fn start_server_offering(methods: &[MethodKind]) -> RunningServer {
         let mut server = TestServer {
             seen: seen_tx,
             channels: Arc::new(Mutex::new(HashMap::new())),
+            bridged: Arc::new(Mutex::new(HashSet::new())),
             sftp_root: served,
         };
         let _ = server.run_on_socket(config, &listener).await;
@@ -280,6 +321,13 @@ impl ScriptedAsker {
     fn secret_questions(&self) -> Vec<SecretQuestion> {
         self.secret_questions.lock().unwrap().clone()
     }
+}
+
+/// Coerces a concrete asker to the trait object `client::connect` now takes.
+/// The production callers pass their `Arc` straight in, where the coercion is
+/// automatic; a test wrapping it in `Arc::clone` needs this nudge.
+fn dyn_asker(asker: &Arc<ScriptedAsker>) -> Arc<dyn harbour_lib::ssh::client::DynAsker> {
+    asker.clone()
 }
 
 impl Asker for ScriptedAsker {
@@ -379,7 +427,7 @@ async fn connects_authenticates_and_runs_a_remote_shell() {
 
     let mut connected = client::connect(
         request(server.addr, vec![AuthChoice::Password]),
-        Arc::clone(&asker),
+        dyn_asker(&asker),
         Arc::new(temp_known_hosts()),
         move |reason, code| {
             let _ = exit_tx.send((reason, code));
@@ -439,7 +487,7 @@ async fn a_remembered_host_key_is_not_questioned_twice() {
     let first = ScriptedAsker::trusting(PASSWORD);
     let connected = client::connect(
         request(server.addr, vec![AuthChoice::Password]),
-        Arc::clone(&first),
+        dyn_asker(&first),
         Arc::clone(&known_hosts),
         |_, _| {},
     )
@@ -451,7 +499,7 @@ async fn a_remembered_host_key_is_not_questioned_twice() {
     let second = ScriptedAsker::trusting(PASSWORD);
     let connected = client::connect(
         request(server.addr, vec![AuthChoice::Password]),
-        Arc::clone(&second),
+        dyn_asker(&second),
         known_hosts,
         |_, _| {},
     )
@@ -472,7 +520,7 @@ async fn an_unknown_host_is_described_before_it_is_trusted() {
 
     let connected = client::connect(
         request(server.addr, vec![AuthChoice::Password]),
-        Arc::clone(&asker),
+        dyn_asker(&asker),
         Arc::new(temp_known_hosts()),
         |_, _| {},
     )
@@ -511,7 +559,7 @@ async fn a_changed_host_key_is_reported_with_both_fingerprints() {
     let asker = ScriptedAsker::trusting(PASSWORD);
     let connected = client::connect(
         request(server.addr, vec![AuthChoice::Password]),
-        Arc::clone(&asker),
+        dyn_asker(&asker),
         Arc::new(known_hosts),
         |_, _| {},
     )
@@ -535,7 +583,7 @@ async fn refusing_a_host_key_aborts_the_connection() {
 
     let error = client::connect(
         request(server.addr, vec![AuthChoice::Password]),
-        Arc::clone(&asker),
+        dyn_asker(&asker),
         Arc::new(temp_known_hosts()),
         |_, _| {},
     )
@@ -563,7 +611,7 @@ async fn an_unusable_agent_is_skipped_and_the_next_method_tried() {
     // nothing, or by being rejected. All three must lead to the password.
     let connected = client::connect(
         request(server.addr, vec![AuthChoice::Agent, AuthChoice::Password]),
-        Arc::clone(&asker),
+        dyn_asker(&asker),
         Arc::new(temp_known_hosts()),
         |_, _| {},
     )
@@ -630,7 +678,7 @@ async fn cancelling_the_password_prompt_stops_the_attempt() {
             server.addr,
             vec![AuthChoice::Password, AuthChoice::KeyboardInteractive],
         ),
-        Arc::clone(&asker),
+        dyn_asker(&asker),
         Arc::new(temp_known_hosts()),
         |_, _| {},
     )
@@ -655,7 +703,7 @@ async fn a_method_the_server_will_not_take_fails_before_asking_the_user() {
 
     let error = client::connect(
         request(server.addr, vec![AuthChoice::KeyboardInteractive]),
-        Arc::clone(&asker),
+        dyn_asker(&asker),
         Arc::new(temp_known_hosts()),
         |_, _| {},
     )
@@ -976,7 +1024,7 @@ async fn sftp_rides_the_terminal_connection_and_lists_directories() {
     let asker = ScriptedAsker::trusting(PASSWORD);
     let mut connected = client::connect(
         request(server.addr, vec![AuthChoice::Password]),
-        Arc::clone(&asker),
+        dyn_asker(&asker),
         Arc::new(temp_known_hosts()),
         |_, _| {},
     )
@@ -1506,4 +1554,73 @@ async fn an_edited_file_is_uploaded_on_save_and_cleaned_up_on_close() {
     assert!(editor.list().is_empty());
     assert_eq!(editor.close(&info.id).unwrap_err().code(), "EDIT_ERROR");
     std::fs::remove_dir_all(&server.sftp_root).ok();
+}
+
+// ---------------------------------------------------------------------------
+// Jump hosts
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn connects_through_a_chain_of_jump_hosts() {
+    // Two bastions and a destination, each a full in-process SSH server. The
+    // client reaches the destination only by tunnelling B1 -> B2 -> dest.
+    let mut outer = start_server().await;
+    let inner = start_server().await;
+    let dest = start_server().await;
+    let known = Arc::new(temp_known_hosts());
+
+    let hop = |addr: SocketAddr, asker: Arc<ScriptedAsker>| Endpoint {
+        target: SshTarget {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+            user: USER.to_string(),
+        },
+        methods: vec![AuthChoice::Password],
+        asker: dyn_asker(&asker),
+    };
+
+    let outer_asker = ScriptedAsker::trusting(PASSWORD);
+    let inner_asker = ScriptedAsker::trusting(PASSWORD);
+    let dest_asker = ScriptedAsker::trusting(PASSWORD);
+
+    let mut connected = client::connect_chain(
+        vec![
+            hop(outer.addr, Arc::clone(&outer_asker)),
+            hop(inner.addr, Arc::clone(&inner_asker)),
+        ],
+        hop(dest.addr, Arc::clone(&dest_asker)),
+        known,
+        100,
+        30,
+        |_, _| {},
+    )
+    .await
+    .expect("the chain should connect");
+
+    // It is the destination's shell that answers, reached through the tunnels.
+    let greeting = read_until(&mut connected.output, "harbour test shell").await;
+    assert!(greeting.contains("$ "), "saw {greeting:?}");
+
+    // Each hop made its own host-key decision and asked for its own password.
+    for asker in [&outer_asker, &inner_asker, &dest_asker] {
+        assert_eq!(asker.host_key_questions().len(), 1);
+        assert_eq!(asker.secret_questions().len(), 1);
+    }
+
+    // The outer bastion was asked to reach the inner one; the inner, the dest.
+    let outer_seen = drain(&mut outer.seen);
+    assert!(
+        outer_seen.iter().any(|event| matches!(event, Seen::DirectTcpip { port, .. } if *port == u32::from(inner.addr.port()))),
+        "the outer bastion should dial the inner one"
+    );
+
+    connected
+        .transport
+        .write(
+            b"echo through
+",
+        )
+        .unwrap();
+    let echoed = read_until(&mut connected.output, "through").await;
+    assert!(echoed.contains("through"), "saw {echoed:?}");
 }

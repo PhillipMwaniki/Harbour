@@ -8,6 +8,8 @@
 //! the UI can act on.
 
 use std::borrow::Cow;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,6 +19,7 @@ use russh::keys::agent::AgentIdentity;
 use russh::keys::ssh_key::Algorithm;
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, MethodKind, MethodSet, SshId};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
 use crate::error::{AppError, AppResult};
@@ -24,8 +27,58 @@ use crate::session::ExitReason;
 use crate::ssh::known_hosts::{fingerprint, KnownHosts, Verdict};
 use crate::ssh::transport::{self, SshTransport};
 use crate::ssh::{
-    agent, Asker, AuthChoice, HostKeyQuestion, HostKeyStatus, SecretKind, SecretQuestion, SshTarget,
+    agent, Asker, AuthChoice, HostKeyAnswer, HostKeyQuestion, HostKeyStatus, SecretAnswer,
+    SecretKind, SecretQuestion, SshTarget,
 };
+
+/// An object-safe view of an [`Asker`].
+///
+/// A jump chain is a list of hops, and each hop answers for a different saved
+/// host - its own host key, its own password. That means one asker per hop,
+/// held in a `Vec`, which a generic `A: Asker` cannot be. This is the same
+/// interface, boxed, so the chain can carry a different asker at every hop
+/// while [`Asker`] stays ergonomic to implement.
+pub trait DynAsker: Send + Sync {
+    fn host_key<'a>(
+        &'a self,
+        question: HostKeyQuestion,
+    ) -> Pin<Box<dyn Future<Output = AppResult<HostKeyAnswer>> + Send + 'a>>;
+
+    fn secret<'a>(
+        &'a self,
+        question: SecretQuestion,
+    ) -> Pin<Box<dyn Future<Output = AppResult<SecretAnswer>> + Send + 'a>>;
+}
+
+impl<A: Asker> DynAsker for A {
+    fn host_key<'a>(
+        &'a self,
+        question: HostKeyQuestion,
+    ) -> Pin<Box<dyn Future<Output = AppResult<HostKeyAnswer>> + Send + 'a>> {
+        Box::pin(Asker::host_key(self, question))
+    }
+
+    fn secret<'a>(
+        &'a self,
+        question: SecretQuestion,
+    ) -> Pin<Box<dyn Future<Output = AppResult<SecretAnswer>> + Send + 'a>> {
+        Box::pin(Asker::secret(self, question))
+    }
+}
+
+/// A stream a russh client can run over: a TCP socket to the first host, then
+/// a `direct-tcpip` channel through each jump. Boxed so the connect loop can
+/// carry either without caring which.
+trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized> Stream for T {}
+
+/// One connection in a chain: where to reach it, how to authenticate, and who
+/// answers its prompts.
+pub struct Endpoint {
+    pub target: SshTarget,
+    pub methods: Vec<AuthChoice>,
+    pub asker: Arc<dyn DynAsker>,
+}
 
 /// The terminal type advertised to the remote. It is what xterm.js implements,
 /// and what the local pty path already claims.
@@ -58,44 +111,115 @@ pub struct Connected {
 ///
 /// `on_exit` fires when the shell ends or the connection drops, mirroring the
 /// local pty path so the session manager treats both the same way.
-pub async fn connect<A, F>(
+pub async fn connect<F>(
     request: ConnectRequest,
-    asker: Arc<A>,
+    asker: Arc<dyn DynAsker>,
     known_hosts: Arc<KnownHosts>,
     on_exit: F,
 ) -> AppResult<Connected>
 where
-    A: Asker,
     F: FnOnce(ExitReason, Option<u32>) + Send + 'static,
 {
-    let target = request.target;
-    let accepted = Arc::new(Mutex::new(None));
-
-    let handler = ClientHandler {
-        host: target.host.clone(),
-        port: target.port,
-        known_hosts,
-        asker: Arc::clone(&asker),
-        accepted: Arc::clone(&accepted),
+    let dest = Endpoint {
+        target: request.target,
+        methods: request.methods,
+        asker,
     };
+    connect_chain(
+        Vec::new(),
+        dest,
+        known_hosts,
+        request.cols,
+        request.rows,
+        on_exit,
+    )
+    .await
+}
 
-    // The TCP connection is made here rather than through `russh::client::connect`
-    // so that "no route to host" stays distinguishable from an SSH-level
-    // failure; the two need very different messages.
-    let stream = tokio::net::TcpStream::connect((target.host.as_str(), target.port))
+/// Connects to `dest`, tunnelling through `jumps` in order first.
+///
+/// Each jump is a full SSH connection - its own host key check, its own
+/// authentication - over which a `direct-tcpip` channel is opened to the next
+/// hop; the next connection runs over that channel. One password per hop, one
+/// host key decision per hop, exactly as `ssh -J` behaves. The jump
+/// connections are kept alive for the life of the session and torn down with
+/// it: closing the terminal closes the whole chain.
+pub async fn connect_chain<F>(
+    jumps: Vec<Endpoint>,
+    dest: Endpoint,
+    known_hosts: Arc<KnownHosts>,
+    cols: u16,
+    rows: u16,
+    on_exit: F,
+) -> AppResult<Connected>
+where
+    F: FnOnce(ExitReason, Option<u32>) + Send + 'static,
+{
+    let cfg = Arc::new(config());
+
+    // The socket to the first host in the chain. Made here, rather than
+    // through `russh::client::connect`, so "no route to host" stays
+    // distinguishable from an SSH-level failure.
+    let first = jumps.first().unwrap_or(&dest);
+    let tcp = tokio::net::TcpStream::connect((first.target.host.as_str(), first.target.port))
         .await
         .map_err(|err| AppError::SshConnect {
-            host: target.host.clone(),
-            port: target.port,
+            host: first.target.host.clone(),
+            port: first.target.port,
             reason: err.to_string(),
         })?;
     // Terminal input is latency-sensitive and tiny: Nagle would coalesce
     // keystrokes into visible lag.
-    let _ = stream.set_nodelay(true);
+    let _ = tcp.set_nodelay(true);
+    let mut stream: Box<dyn Stream> = Box::new(tcp);
 
-    let mut session = russh::client::connect_stream(Arc::new(config()), stream, handler).await?;
+    // Walk the jumps, tunnelling one hop deeper each time. The handles are
+    // kept: dropping one closes every connection nested inside it.
+    let mut hops: Vec<Handle<ClientHandler>> = Vec::with_capacity(jumps.len());
+    for (index, hop) in jumps.iter().enumerate() {
+        let handler = ClientHandler::new(
+            &hop.target,
+            Arc::clone(&known_hosts),
+            Arc::clone(&hop.asker),
+        );
+        let mut session = russh::client::connect_stream(Arc::clone(&cfg), stream, handler).await?;
+        authenticate(&mut session, &hop.target, &hop.methods, hop.asker.as_ref()).await?;
 
-    let method = authenticate(&mut session, &target, &request.methods, asker.as_ref()).await?;
+        // The next hop in the chain, which this one dials on our behalf.
+        let next = jumps.get(index + 1).unwrap_or(&dest);
+        let channel = session
+            .channel_open_direct_tcpip(
+                next.target.host.clone(),
+                u32::from(next.target.port),
+                "127.0.0.1",
+                0,
+            )
+            .await
+            .map_err(|err| AppError::SshConnect {
+                host: next.target.host.clone(),
+                port: next.target.port,
+                reason: format!("via {}: {err}", hop.target.label()),
+            })?;
+        stream = Box::new(channel.into_stream());
+        hops.push(session);
+    }
+
+    let accepted = Arc::new(Mutex::new(None));
+    let handler = ClientHandler::new(
+        &dest.target,
+        Arc::clone(&known_hosts),
+        Arc::clone(&dest.asker),
+    )
+    .recording(Arc::clone(&accepted));
+    let mut session = russh::client::connect_stream(cfg, stream, handler).await?;
+
+    let method = authenticate(
+        &mut session,
+        &dest.target,
+        &dest.methods,
+        dest.asker.as_ref(),
+    )
+    .await?;
 
     let mut channel = session
         .channel_open_session()
@@ -106,8 +230,8 @@ where
         .request_pty(
             true,
             TERM,
-            request.cols.max(1) as u32,
-            request.rows.max(1) as u32,
+            u32::from(cols.max(1)),
+            u32::from(rows.max(1)),
             0,
             0,
             &[],
@@ -122,14 +246,21 @@ where
         .map_err(|err| AppError::SshChannel(err.to_string()))?;
     pending.extend(wait_for_reply(&mut channel, "shell").await?);
 
-    let running = transport::start(session, channel, pending, on_exit);
+    // The jump handles ride along with the session and drop when it ends.
+    let running = transport::start(session, channel, pending, Box::new(hops), on_exit);
 
     let fingerprint = accepted
         .lock()
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
 
-    tracing::info!(host = %target.host, port = target.port, method, "ssh session established");
+    tracing::info!(
+        host = %dest.target.host,
+        port = dest.target.port,
+        jumps = jumps.len(),
+        method,
+        "ssh session established"
+    );
 
     Ok(Connected {
         transport: running.transport,
@@ -191,11 +322,11 @@ enum Outcome {
 }
 
 /// Tries each method in turn, skipping any the server will not entertain.
-async fn authenticate<A: Asker>(
-    session: &mut Handle<ClientHandler<A>>,
+async fn authenticate(
+    session: &mut Handle<ClientHandler>,
     target: &SshTarget,
     methods: &[AuthChoice],
-    asker: &A,
+    asker: &dyn DynAsker,
 ) -> AppResult<&'static str> {
     // `none` is both a real method - some hosts accept it - and the standard
     // way to find out what else the server will take.
@@ -289,8 +420,8 @@ fn describe_failure(tried: &[String], refused: &[&str], remaining: &MethodSet) -
 }
 
 /// Offers every identity the agent holds, the way `ssh -A` would.
-async fn authenticate_with_agent<A: Asker>(
-    session: &mut Handle<ClientHandler<A>>,
+async fn authenticate_with_agent(
+    session: &mut Handle<ClientHandler>,
     target: &SshTarget,
 ) -> AppResult<Outcome> {
     let mut agent = agent::connect().await?;
@@ -334,11 +465,11 @@ async fn authenticate_with_agent<A: Asker>(
 
 /// Loads a key file, asking for the passphrase only if the file turns out to
 /// need one.
-async fn authenticate_with_key<A: Asker>(
-    session: &mut Handle<ClientHandler<A>>,
+async fn authenticate_with_key(
+    session: &mut Handle<ClientHandler>,
     target: &SshTarget,
     path: &str,
-    asker: &A,
+    asker: &dyn DynAsker,
 ) -> AppResult<Outcome> {
     let key = match load_secret_key(path, None) {
         Ok(key) => key,
@@ -384,10 +515,10 @@ async fn authenticate_with_key<A: Asker>(
     )
 }
 
-async fn authenticate_with_password<A: Asker>(
-    session: &mut Handle<ClientHandler<A>>,
+async fn authenticate_with_password(
+    session: &mut Handle<ClientHandler>,
     target: &SshTarget,
-    asker: &A,
+    asker: &dyn DynAsker,
 ) -> AppResult<Outcome> {
     let answer = asker
         .secret(SecretQuestion {
@@ -420,10 +551,10 @@ async fn authenticate_with_password<A: Asker>(
 /// `keyboard-interactive`, where the server words the questions. This is how
 /// password login is actually implemented on a good many hosts, and it is the
 /// only route for one-time-code prompts.
-async fn authenticate_interactively<A: Asker>(
-    session: &mut Handle<ClientHandler<A>>,
+async fn authenticate_interactively(
+    session: &mut Handle<ClientHandler>,
     target: &SshTarget,
-    asker: &A,
+    asker: &dyn DynAsker,
 ) -> AppResult<Outcome> {
     let mut response = session
         .authenticate_keyboard_interactive_start(&target.user, None)
@@ -488,16 +619,35 @@ fn rsa_hash_for(
 }
 
 /// The connection-side half of the host key policy in `docs/security.md`.
-struct ClientHandler<A: Asker> {
+struct ClientHandler {
     host: String,
     port: u16,
     known_hosts: Arc<KnownHosts>,
-    asker: Arc<A>,
-    /// Fingerprint of whatever key was accepted, read back after connecting.
+    asker: Arc<dyn DynAsker>,
+    /// Set to the accepted host key's fingerprint. Only the destination's is
+    /// read; a jump's handler leaves it `None`.
     accepted: Arc<Mutex<Option<String>>>,
 }
 
-impl<A: Asker> Handler for ClientHandler<A> {
+impl ClientHandler {
+    fn new(target: &SshTarget, known_hosts: Arc<KnownHosts>, asker: Arc<dyn DynAsker>) -> Self {
+        Self {
+            host: target.host.clone(),
+            port: target.port,
+            known_hosts,
+            asker,
+            accepted: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Records the accepted fingerprint into a shared slot the caller reads.
+    fn recording(mut self, accepted: Arc<Mutex<Option<String>>>) -> Self {
+        self.accepted = accepted;
+        self
+    }
+}
+
+impl Handler for ClientHandler {
     type Error = AppError;
 
     async fn check_server_key(&mut self, offered: &PublicKeyOrCertificate) -> AppResult<bool> {
