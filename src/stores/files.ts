@@ -29,6 +29,8 @@ export const EMPTY_PANE: PaneState = {
 export interface FilesState {
   /** Whether the file dock is showing. */
   open: boolean;
+  /** Whether the panes follow the focused shell's working directory (OSC 7). */
+  follow: boolean;
   showHidden: boolean;
   sort: SortSpec;
   local: PaneState;
@@ -39,6 +41,7 @@ export interface FilesState {
 
   setOpen: (open: boolean) => void;
   toggle: () => void;
+  toggleFollow: () => void;
   toggleHidden: () => void;
   sortBy: (key: SortKey) => void;
   /** Lists a local directory: the one given, else the current one, else home. */
@@ -58,6 +61,7 @@ const remoteRequests = new Map<string, number>();
 
 export const useFiles = create<FilesState>((set, get) => ({
   open: false,
+  follow: false,
   showHidden: false,
   sort: DEFAULT_SORT,
   local: EMPTY_PANE,
@@ -66,6 +70,7 @@ export const useFiles = create<FilesState>((set, get) => ({
 
   setOpen: (open) => set({ open }),
   toggle: () => set((state) => ({ open: !state.open })),
+  toggleFollow: () => set((state) => ({ follow: !state.follow })),
   toggleHidden: () => set((state) => ({ showHidden: !state.showHidden })),
   sortBy: (key) => set((state) => ({ sort: nextSort(state.sort, key) })),
 

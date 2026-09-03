@@ -49,6 +49,8 @@ export interface Pane {
   error: string | null;
   /** Set once this session is being logged to a file. */
   log: LogStatus | null;
+  /** The shell's working directory, when it reports one via OSC 7. */
+  cwd: string | null;
 }
 
 /**
@@ -101,6 +103,8 @@ export interface SessionsState {
   markSessionClosed: (sessionId: string, exitCode: number | null, error?: string) => void;
   setTitle: (tabId: string, paneId: string, title: string) => void;
   setLog: (sessionId: string, log: LogStatus | null) => void;
+  /** Records the working directory a session reported. */
+  setCwd: (sessionId: string, cwd: string) => void;
   setActive: (tabId: string | null) => void;
   setActivePane: (tabId: string, paneId: string) => void;
   /** Moves focus within the active tab; used by the keymap. */
@@ -154,6 +158,7 @@ function newPane(target: SessionTarget, shells: ShellSpec[]): Pane {
     exitCode: null,
     error: null,
     log: null,
+    cwd: null,
   };
 }
 
@@ -303,6 +308,17 @@ export const useSessions = create<SessionsState>((set, get) => ({
         );
         if (!pane) return tab;
         return mapPane(tab, pane.paneId, (current) => ({ ...current, log }));
+      }),
+    })),
+
+  setCwd: (sessionId, cwd) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) => {
+        const pane = Object.values(tab.panes).find(
+          (candidate) => candidate.sessionId === sessionId,
+        );
+        if (!pane || pane.cwd === cwd) return tab;
+        return mapPane(tab, pane.paneId, (current) => ({ ...current, cwd }));
       }),
     })),
 

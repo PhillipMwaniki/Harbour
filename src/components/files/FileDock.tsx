@@ -23,6 +23,8 @@ interface Props {
   /** The SSH session of the focused terminal, or `null` for a local shell. */
   sessionId: string | null;
   sessionTitle: string | null;
+  /** The focused terminal's working directory, for follow-cwd. */
+  focusedCwd: string | null;
   onClose: () => void;
 }
 
@@ -67,13 +69,14 @@ function hitTest(x: number, y: number): { side: PaneSide; dir: string | null } |
  * panes use pointer events rather than HTML5 drag and drop, because enabling
  * the latter would disable the desktop drop on Windows.
  */
-export function FileDock({ sessionId, sessionTitle, onClose }: Props) {
+export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props) {
   const showHidden = useFiles((state) => state.showHidden);
+  const follow = useFiles((state) => state.follow);
   const sort = useFiles((state) => state.sort);
   const local = useFiles((state) => state.local);
   const roots = useFiles((state) => state.roots);
   const remote = useFiles((state) => remotePane(state, sessionId));
-  const { loadLocal, loadRoots, loadRemote, toggleHidden, sortBy } = useFiles.getState();
+  const { loadLocal, loadRoots, loadRemote, toggleHidden, toggleFollow, sortBy } = useFiles.getState();
   const transfers = useTransfers((state) => state.transfers);
   const { enqueue, resolve, openEdit } = useTransfers.getState();
 
@@ -97,6 +100,15 @@ export function FileDock({ sessionId, sessionTitle, onClose }: Props) {
       void loadRemote(sessionId);
     }
   }, [sessionId, loadRemote]);
+
+  // Follow-cwd: when on, the pane for the focused terminal jumps to the
+  // directory the shell reported (OSC 7). Remote when an SSH terminal is
+  // focused, local otherwise.
+  useEffect(() => {
+    if (!follow || !focusedCwd) return;
+    if (sessionId) void loadRemote(sessionId, focusedCwd);
+    else void loadLocal(focusedCwd);
+  }, [follow, focusedCwd, sessionId, loadRemote, loadLocal]);
 
   // A selection is of the directory it was made in.
   useEffect(() => setRemoteSelected(new Set()), [remote.path, sessionId]);
@@ -276,6 +288,10 @@ export function FileDock({ sessionId, sessionTitle, onClose }: Props) {
     >
       <div className="flex items-center gap-2 border-b border-[var(--hb-border)] px-2 py-1 text-xs">
         <span className="mr-auto font-medium">Files</span>
+        <label className="flex items-center gap-1 text-[var(--hb-fg-muted)]" title="Follow the focused shell's directory (needs OSC 7)">
+          <input type="checkbox" checked={follow} onChange={toggleFollow} />
+          Follow
+        </label>
         <label className="flex items-center gap-1 text-[var(--hb-fg-muted)]">
           <input type="checkbox" checked={showHidden} onChange={toggleHidden} />
           Hidden

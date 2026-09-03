@@ -329,6 +329,7 @@ describe("lookup helpers", () => {
           exitCode: null,
           error: null,
           log: null,
+          cwd: null,
         },
       },
     }));

@@ -557,6 +557,7 @@ export default function App() {
           <FileDock
             sessionId={remoteSession}
             sessionTitle={remoteSession && focusedTerminal ? focusedTerminal.title : null}
+            focusedCwd={focusedTerminal?.cwd ?? null}
             onClose={() => useFiles.getState().setOpen(false)}
           />
         )}

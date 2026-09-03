@@ -22,6 +22,7 @@ import { compileRules } from "@/lib/highlight";
 import { actionFor, chordFromEvent, resolveBindings } from "@/lib/keymap";
 import { startLog } from "@/lib/sessionLog";
 import { isMultiline, usePaste } from "@/stores/paste";
+import { pathFromOsc7 } from "@/lib/cwd";
 import { defaultFontFamily, type Theme } from "@/lib/themes";
 import { useSessions, type SessionTarget } from "@/stores/sessions";
 import { themeForHost, useSettings } from "@/stores/settings";
@@ -237,6 +238,16 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
           }),
           term.onTitleChange((title) => {
             if (title) void sessionSetTitle(info.sessionId, title).catch(() => {});
+          }),
+        );
+
+        // OSC 7: the shell reporting its working directory. Follow-cwd in the
+        // file dock reads what this records.
+        disposables.push(
+          term.parser.registerOscHandler(7, (payload) => {
+            const path = pathFromOsc7(payload);
+            if (path) useSessions.getState().setCwd(info.sessionId, path);
+            return true;
           }),
         );
 
