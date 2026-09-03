@@ -21,6 +21,7 @@ import { errorMessage, type SessionInfo } from "@/ipc/types";
 import { compileRules } from "@/lib/highlight";
 import { actionFor, chordFromEvent, resolveBindings } from "@/lib/keymap";
 import { startLog } from "@/lib/sessionLog";
+import { isMultiline, usePaste } from "@/stores/paste";
 import { defaultFontFamily, type Theme } from "@/lib/themes";
 import { useSessions, type SessionTarget } from "@/stores/sessions";
 import { themeForHost, useSettings } from "@/stores/settings";
@@ -168,6 +169,24 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
       // DOM renderer stays active.
     }
 
+    // Intercept a multi-line paste before it reaches the shell: xterm cannot
+    // tell paste from typing, so this catches it at the DOM, in the capture
+    // phase, and suppresses xterm's own paste until the user has confirmed.
+    const onPaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData("text") ?? "";
+      if (!isMultiline(text)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void usePaste
+        .getState()
+        .confirm(text)
+        .then((send) => {
+          if (send) term.paste(text);
+          term.focus();
+        });
+    };
+    host.addEventListener("paste", onPaste, true);
+
     const highlight = new HighlightLayer(term);
     termRef.current = term;
     fitRef.current = fit;
@@ -255,6 +274,7 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
       disposed = true;
       unregister();
       observer.disconnect();
+      host.removeEventListener("paste", onPaste, true);
       acker?.dispose();
       for (const d of disposables) d.dispose();
       highlight.dispose();

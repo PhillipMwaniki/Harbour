@@ -145,5 +145,7 @@ Not yet:
   file is plain SQLite - it holds no secrets, but it does describe the estate,
   so it is worth the same care as `~/.ssh/config`.
 - Agent forwarding is not implemented at all, which is the safe default.
-- The clipboard rules above are not implemented: a multi-line paste is sent
-  without confirmation. That is milestone 7, with snippets.
+- A multi-line paste is confirmed before it reaches the shell, showing the
+  exact text that will be sent, so a pasted snippet cannot run commands the
+  user never read. Single-line pastes are not interrupted. Bracketed paste,
+  where the remote enables it, is xterm's own.

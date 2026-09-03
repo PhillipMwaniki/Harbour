@@ -7,6 +7,7 @@ import { ConnectDialog, type ConnectRequest } from "@/components/ssh/ConnectDial
 import { HostKeyDialog } from "@/components/ssh/HostKeyDialog";
 import { SecretDialog } from "@/components/ssh/SecretDialog";
 import { PaneTree } from "@/components/terminal/PaneTree";
+import { PasteDialog } from "@/components/terminal/PasteDialog";
 import { paneHandle } from "@/components/terminal/registry";
 import { TabBar } from "@/components/terminal/TabBar";
 import { HostDialog } from "@/components/vault/HostDialog";
@@ -563,6 +564,8 @@ export default function App() {
           />
         )}
       </div>
+
+      <PasteDialog />
     </div>
   );
 }
