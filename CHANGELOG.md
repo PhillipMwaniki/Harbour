@@ -7,6 +7,18 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Added
 
+- Importing straight from an Xshell `.xts` backup - the file *Tools › Backup*
+  writes - as well as from an export directory. The archive is read in place;
+  the private keys and credential file it also holds are never opened.
+- Host keys from a backup, reviewed alongside the sessions. New ones are
+  written to Harbour's own `known_hosts`, saving a trust-on-first-use prompt
+  per host; a key that differs from one already trusted is shown and refused,
+  since an import must not be a quieter way past the connect-time prompt.
+- Xshell colour schemes (`.scs`), as a file, a directory, or straight out of a
+  backup, alongside the VS Code, Windows Terminal and iTerm formats.
+- Xshell highlight sets (`.hls`) as highlight rules, from a file, a directory
+  or a backup. Colour indices are resource ids offset by 280 and the palette is
+  `BBGGRR`; both are handled so nobody has to know.
 - **Milestone 4: terminal polish.** A tab now holds a tree of split panes -
   Ctrl+Shift+D splits right, Ctrl+Shift+B splits down, the divider drags, and
   a split repeats whatever the focused pane was showing, so splitting a host
@@ -130,6 +142,12 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Fixed
 
+- The Xshell import found nothing in a real export. Xshell writes its files as
+  UTF-16LE with a byte order mark; they were read as UTF-8, so every section
+  header came out as `[\0C\0O\0N…` and every file was skipped with "no
+  [CONNECTION] section". The tests used hand-written UTF-8 fixtures, which
+  Xshell never produces. Files are now decoded by their byte order mark, and
+  the regression test is built from the bytes Xshell writes.
 - The first prompt no longer renders blank. The pty was opened at a guessed
   80x24 and resized once xterm had measured itself; ConPTY repaints on resize
   and PSReadLine only redraws on input, so the shell's opening prompt was lost

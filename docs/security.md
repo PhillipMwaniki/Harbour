@@ -50,6 +50,11 @@ binding on every change, and most of them predate the code that will need them.
   the stored and the offered fingerprint. There is no "always accept" option.
 - Known hosts are read from the user's `~/.ssh/known_hosts` and written to an
   app-managed file in OpenSSH format.
+- Host keys imported from an Xshell backup are reviewed first, and only keys
+  with nothing on file are written. A key that differs from one already
+  trusted is shown and refused: the connect-time prompt, with both
+  fingerprints in front of the user, is the only way past a changed key, and
+  an import must not be a quieter one.
 
 ## Agent forwarding
 
@@ -107,6 +112,12 @@ Implemented:
   are read into a list the user confirms; Xshell passwords are still not
   decoded, only noted as having existed. Colour scheme imports work the same
   way, and read colours out of the file and nothing else.
+- Reading an Xshell `.xts` backup in place. It is a ZIP of the whole profile,
+  and alongside sessions and host keys it holds the user's private keys and a
+  credential file. Harbour reads four directories out of it by name and has no
+  code path that opens the others; a test asserts that nothing the reader
+  returns contains what is under `UserKeys`. Entry names are checked against
+  path traversal before use, as any untrusted archive's should be.
 - A settings file that holds no secrets of any kind - theme, font, keymap,
   highlight rules, per-host themes, where logs go - and that is treated as
   untrusted input on the way in: a malformed one is moved aside and replaced

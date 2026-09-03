@@ -148,7 +148,7 @@ id that is no longer waiting - it timed out, or its connection died - returns
 | `vault_keychain_available` | - | `boolean` |
 | `vault_preview_ssh_config` | `path?: string` | `ImportPreview` |
 | `vault_preview_xshell` | `path: string` | `ImportPreview` |
-| `vault_apply_import` | `candidates: ImportCandidate[]`, `username: string \| null` | `ImportResult` |
+| `vault_apply_import` | `candidates: ImportCandidate[]`, `username: string \| null`, `hostKeys?: HostKeyCandidate[]` | `ImportResult` |
 | `host_connect` | `hostId: string`, `cols: number`, `rows: number` | `SessionInfo` |
 
 `vault_tree` returns the whole tree in one call: a few hundred hosts at most,
@@ -170,6 +170,35 @@ found for review. `vault_apply_import` is what writes, and it skips any
 candidate carrying a `skipReason` or lacking a username with no `username`
 fallback to fall back on, rather than importing a guess.
 
+`vault_preview_xshell` takes either an export directory or a `.xts` backup -
+the ZIP Xshell's *Tools › Backup* writes, recognised by extension or by the ZIP
+signature. Session files are UTF-16LE with a byte order mark and are decoded as
+such; a backup is read in place, never extracted to disk, and the private keys
+it also contains (`com/SECSH/UserKeys`) are never opened.
+
+A backup also yields `hostKeys`: the host keys Xshell had accepted, each
+checked against what Harbour already trusts.
+
+```ts
+type HostKeyCandidate = {
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;   // SHA256:..., as the connect-time prompt shows it
+  key: string;           // OpenSSH one-line form; a public key is not a secret
+  status: "new" | "known" | "changed" | "revoked";
+};
+```
+
+`new` means nothing is on file for that host and algorithm; `known` means it
+is already trusted; `changed` means a *different* key of the same algorithm is
+on file. `vault_apply_import` writes **only `new` keys**, whatever it is handed,
+and re-checks each against the store first so reviewing the same backup twice
+cannot double a line. A changed key is never replaced by an import: the
+connect-time prompt, with both fingerprints in front of the user, is the only
+way past one. Keys go to Harbour's own `known_hosts`; `~/.ssh` is never
+written. `ImportResult.hostKeys` says how many were written.
+
 `host_connect` is `ssh_connect` with the vault behind it. The prompts are the
 same, except that a saved password is taken from the keychain without asking,
 and a `connection:auth_prompt` for a saved host carries `canRemember: true` so
@@ -184,6 +213,7 @@ the answer can be saved.
 | `settings_reload` | - | `Settings` |
 | `settings_paths` | - | `{ settings: string, logs: string }` |
 | `theme_import` | `path: string` | `SchemeImport` |
+| `highlight_import` | `path: string` | `HighlightImport` |
 
 `settings_save` replaces the **whole document**; there is no partial update,
 because a settings dialog that merges field by field ends up with two sources
@@ -199,11 +229,20 @@ preferences: theme, font, keymap, highlight rules, per-host theme overrides and
 where logs go.
 
 `theme_import` reads a VS Code theme, a Windows Terminal `settings.json`, an
-iTerm2 `.itermcolors` file, or a directory of them, and writes nothing: the
+iTerm2 `.itermcolors` file, an Xshell `.scs` scheme, a directory of any of
+those, or the schemes inside an Xshell `.xts` backup, and writes nothing: the
 caller reviews the result and saves what it wants with `settings_save`, the same
 way the vault importers work. Imported theme ids are prefixed `imported.` so an
 imported "Nord" cannot shadow the built-in one. `notes` names the files that
 were not colour schemes.
+
+`highlight_import` reads Xshell highlight sets - a `.hls` file, a directory of
+them, or the sets inside a `.xts` backup - as `HighlightRule`s with fresh ids,
+and writes nothing; the caller adds what it wants to `settings.highlights`.
+Two things about the format are handled here so nobody has to know them:
+colour indices are resource ids offset by 280, and the palette is `BBGGRR`
+(`COLORREF`), the reverse of every other file in the backup. A keyword not
+marked `UseRegex` is escaped so it matches itself.
 
 ## Events
 
@@ -273,6 +312,7 @@ than useless.
 | `KEYRING_UNAVAILABLE` | The OS keychain could not be reached |
 | `SETTINGS_ERROR` | The settings file could not be written |
 | `SCHEME_IMPORT_FAILED` | That path held no colour scheme Harbour understands |
+| `HIGHLIGHT_IMPORT_FAILED` | That path held no Xshell highlight set |
 | `LOG_FAILED` | A session log could not be opened |
 | `PROMPT_NOT_FOUND` | `connection_respond` for a prompt no longer waiting |
 | `PROMPT_TIMED_OUT` | Nobody answered a prompt within five minutes |

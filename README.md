@@ -91,9 +91,12 @@ press Import.
 `ssh`'s own rules - first value wins, and wildcard `Host` blocks contribute
 defaults rather than becoming hosts of their own.
 
-**Xshell** walks an export directory, mirroring its folder tree. Sessions that
-are not SSH are listed with the reason they cannot come across rather than
-being dropped silently. Entries whose source never named a username are
+**Xshell** reads a `.xts` backup - the file *Tools › Backup* writes, which is
+what most people actually have - or a directory of exported `.xsh` files,
+mirroring the folder tree either way. Sessions that are not SSH are listed
+with the reason they cannot come across rather than being dropped silently. A
+backup also offers the host keys Xshell had accepted, so a migrated estate does
+not greet you with a trust-on-first-use prompt per host. Entries whose source never named a username are
 skipped unless you supply one to fall back on - importing under a guess would
 produce hosts that fail to connect for a reason you cannot see.
 
@@ -117,7 +120,8 @@ did; `raw` keeps every byte. Settings can start a log for every session.
 **Highlight rules** colour text in output you do not control - `ERROR` from a
 log that never learned about ANSI, a hostname you must not confuse with
 another. They are regular expressions with a foreground and a background, and
-the rule listed first wins any text two of them match.
+the rule listed first wins any text two of them match. Xshell highlight sets
+(`.hls`, or the ones inside a `.xts` backup) import from the same page.
 
 ## Themes
 
@@ -128,7 +132,8 @@ the terminal: chrome colours are published as CSS custom properties, so the tab
 bar, menus and dialogs move with it.
 
 **Import** a VS Code theme, a Windows Terminal `settings.json`, an iTerm2
-`.itermcolors` file, or a whole directory of them, from *Settings*, under
+`.itermcolors` file, an Xshell `.scs` scheme, a whole directory of them, or
+every scheme inside an Xshell `.xts` backup, from *Settings*, under
 *Appearance*. Every one of those describes a terminal palette and nothing else,
 so Harbour derives the chrome colours by mixing the scheme's own background and
 foreground - a warm scheme gets warm borders.
@@ -205,10 +210,19 @@ docs/             architecture and the IPC contract
 
 ## Migrating from Xshell
 
-Point Harbour at an Xshell export directory - *Import Xshell* at the foot of
-the sidebar - and it will walk the `.xsh` files, mirroring the session-manager
-folder tree, and import host, port, protocol, username and description for
-each session.
+In Xshell, *Tools › Backup* writes a single `.xts` file. Point Harbour at it -
+*Import Xshell* at the foot of the sidebar - and it reads the backup in place:
+
+- **Sessions**, mirroring the session-manager folder tree, with host, port,
+  protocol, username and description for each.
+- **Host keys** Xshell had accepted, offered for review. New ones go to
+  Harbour's own `known_hosts`; a key that differs from one Harbour already
+  trusts is shown and refused, and must go through the connect-time prompt.
+- **Colour schemes** and **highlight sets**, from Settings.
+
+The backup also contains your private keys and a credential file. Harbour
+never opens those - they are not its to copy. A directory of exported `.xsh`
+files works too.
 
 Stored passwords are **not** decoded. Xshell encrypts them against the Windows
 account and, if set, a master password, using a scheme that differs across
@@ -217,7 +231,8 @@ recovered plaintext into a new store. Imported hosts are flagged as having had a
 password so Harbour can prompt once, on first connect, and put it in the OS
 keychain.
 
-The parser and its tests are in `src-tauri/src/vault/xshell.rs`.
+The session parser and its tests are in `src-tauri/src/vault/xshell.rs`; the
+backup layout is in `src-tauri/src/xts.rs`.
 
 ## Documentation
 
