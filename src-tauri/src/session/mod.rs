@@ -1,4 +1,5 @@
 pub mod local;
+pub mod logging;
 pub mod manager;
 pub mod reader;
 pub mod shell;

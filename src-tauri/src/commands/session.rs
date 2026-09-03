@@ -1,24 +1,34 @@
 //! Session IPC surface. See `docs/ipc.md` for the contract.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
+use crate::session::logging::{LogSlot, LogStatus, OutputLog};
 use crate::session::manager::OpenLocal;
 use crate::session::reader::{self, Backpressure, OutputSink, SinkClosed};
 use crate::session::SessionInfo;
+use crate::settings::LogFormat;
 use crate::AppState;
 
 /// Bridges batched pty output onto a Tauri channel as raw bytes. Terminal
 /// output must not be JSON-encoded: it is neither valid UTF-8 in general nor
 /// cheap enough to stringify at 50 MB/s.
-struct ChannelSink(Channel<InvokeResponseBody>);
+struct ChannelSink {
+    channel: Channel<InvokeResponseBody>,
+    /// The session log, if one is running. It sits here rather than inside the
+    /// pump so that starting or stopping a log needs no restart of the pump -
+    /// and so that what is logged is exactly what the terminal was sent.
+    log: Arc<LogSlot>,
+}
 
 impl OutputSink for ChannelSink {
     fn send(&self, data: Vec<u8>) -> Result<(), SinkClosed> {
-        self.0
+        self.log.write(&data);
+        self.channel
             .send(InvokeResponseBody::Raw(data))
             .map_err(|_| SinkClosed)
     }
@@ -69,9 +79,13 @@ pub async fn session_subscribe(
     let handle = state.sessions.get(&session_id)?;
     let output = handle.take_output()?;
     let backpressure: Backpressure = handle.backpressure.clone();
+    let sink = ChannelSink {
+        channel: on_data,
+        log: Arc::clone(&handle.log),
+    };
 
     tauri::async_runtime::spawn(async move {
-        reader::pump(output, ChannelSink(on_data), backpressure).await;
+        reader::pump(output, sink, backpressure).await;
         tracing::debug!(session = %session_id, "output pump finished");
     });
 
@@ -127,4 +141,58 @@ pub async fn session_close(state: State<'_, AppState>, session_id: String) -> Ap
 #[tauri::command]
 pub async fn session_list(state: State<'_, AppState>) -> AppResult<Vec<SessionInfo>> {
     Ok(state.sessions.list())
+}
+
+// ---------------------------------------------------------------------------
+// Session logging
+// ---------------------------------------------------------------------------
+
+/// Starts writing this session's output to `path`.
+///
+/// Starting a log on a session that already has one replaces it, so "log
+/// somewhere else" is one action rather than a stop and a start with a gap in
+/// the middle. What was already on screen is not in the file: a log begins
+/// when it is asked for.
+#[tauri::command]
+pub async fn session_log_start(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    format: LogFormat,
+    append: bool,
+) -> AppResult<LogStatus> {
+    let handle = state.sessions.get(&session_id)?;
+    let target = PathBuf::from(path);
+    let log =
+        tauri::async_runtime::spawn_blocking(move || OutputLog::start(&target, format, append))
+            .await
+            .map_err(|err| AppError::LogFailed(format!("log task failed: {err}")))??;
+
+    let status = handle.log.set(log);
+    tracing::info!(session = %session_id, path = ?status.path, "session logging started");
+    Ok(status)
+}
+
+/// Stops logging and closes the file. Stopping a session that is not being
+/// logged is success, not an error.
+#[tauri::command]
+pub async fn session_log_stop(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<LogStatus> {
+    let handle = state.sessions.get(&session_id)?;
+    // Closing waits for the queued output to reach the disk, which is disk
+    // work and does not belong on the runtime pumping terminal output.
+    let log = Arc::clone(&handle.log);
+    tauri::async_runtime::spawn_blocking(move || log.clear())
+        .await
+        .map_err(|err| AppError::LogFailed(format!("log task failed: {err}")))
+}
+
+#[tauri::command]
+pub async fn session_log_status(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> AppResult<LogStatus> {
+    Ok(state.sessions.get(&session_id)?.log.status())
 }

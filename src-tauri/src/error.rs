@@ -73,6 +73,9 @@ pub enum AppError {
     #[error("could not import a colour scheme from {path}: {reason}")]
     SchemeImport { path: String, reason: String },
 
+    #[error("session logging failed: {0}")]
+    LogFailed(String),
+
     #[error("prompt {0} is no longer waiting for an answer")]
     PromptNotFound(String),
 
@@ -108,6 +111,7 @@ impl AppError {
             AppError::Keyring(_) => "KEYRING_UNAVAILABLE",
             AppError::Settings(_) => "SETTINGS_ERROR",
             AppError::SchemeImport { .. } => "SCHEME_IMPORT_FAILED",
+            AppError::LogFailed(_) => "LOG_FAILED",
             AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
             AppError::PromptTimedOut => "PROMPT_TIMED_OUT",
             AppError::Internal(_) => "INTERNAL",

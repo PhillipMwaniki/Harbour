@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::error::{AppError, AppResult};
 use crate::session::local::{self, SpawnOptions};
+use crate::session::logging::LogSlot;
 use crate::session::reader::Backpressure;
 use crate::session::shell;
 use crate::session::{SessionClosed, SessionId, SessionInfo, SessionKind, Transport};
@@ -21,6 +22,9 @@ pub struct SessionHandle {
     /// Taken exactly once, by `session_subscribe`.
     output: Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
     pub backpressure: Backpressure,
+    /// The session's output log, if one has been started. Shared with the
+    /// sink so starting and stopping a log needs no restart of the pump.
+    pub log: Arc<LogSlot>,
 }
 
 impl SessionHandle {
@@ -143,6 +147,7 @@ impl SessionManager {
             transport: session.transport,
             output: Mutex::new(Some(session.output)),
             backpressure: Backpressure::new(),
+            log: Arc::new(LogSlot::default()),
         });
 
         let info = handle.info();
