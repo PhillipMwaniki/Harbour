@@ -39,8 +39,20 @@ function toBytes(payload: ArrayBuffer | number[] | Uint8Array): Uint8Array {
   return Uint8Array.from(payload);
 }
 
+/**
+ * Sends input as a raw request body rather than a JSON array.
+ *
+ * Keystrokes are tiny, but a paste is not: `[104,101,...]` is roughly four
+ * times the bytes and a JSON parse at the far end. The session id travels in a
+ * header because the body is the payload.
+ */
 export function sessionWrite(sessionId: string, data: Uint8Array): Promise<void> {
-  return invoke("session_write", { sessionId, data: Array.from(data) });
+  // A view into a larger buffer would send the whole buffer, so slice first.
+  const body =
+    data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+      ? data
+      : data.slice();
+  return invoke("session_write", body, { headers: { "session-id": sessionId } });
 }
 
 export function sessionResize(sessionId: string, cols: number, rows: number): Promise<void> {

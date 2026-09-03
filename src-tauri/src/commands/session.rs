@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::ipc::{Channel, InvokeResponseBody};
+use tauri::ipc::{Channel, InvokeBody, InvokeResponseBody, Request};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{AppError, AppResult};
@@ -92,13 +92,37 @@ pub async fn session_subscribe(
     Ok(())
 }
 
+/// Input, as a raw request body rather than a JSON array.
+///
+/// Keystrokes are tiny, but a paste is not: a 2 MB buffer serialised as
+/// `[104,101,...]` is roughly four times the bytes and a JSON parse at the far
+/// end. The session id travels in a header because the body is the payload.
+///
+/// A JSON body is still accepted, so a caller that has not been updated - and
+/// the tests - keep working.
 #[tauri::command]
-pub async fn session_write(
-    state: State<'_, AppState>,
-    session_id: String,
-    data: Vec<u8>,
-) -> AppResult<()> {
+pub async fn session_write(state: State<'_, AppState>, request: Request<'_>) -> AppResult<()> {
+    let session_id = request
+        .headers()
+        .get("session-id")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| AppError::internal("session_write is missing its session-id header"))?
+        .to_string();
+
+    let data = input_bytes(request.body())?;
     state.sessions.get(&session_id)?.write(&data)
+}
+
+/// The bytes to write, from either body shape.
+///
+/// The webview sends a raw body over the custom protocol and falls back to a
+/// JSON array where that is unavailable, so both have to be understood.
+fn input_bytes(body: &InvokeBody) -> AppResult<Vec<u8>> {
+    match body {
+        InvokeBody::Raw(bytes) => Ok(bytes.clone()),
+        InvokeBody::Json(value) => serde_json::from_value::<Vec<u8>>(value.clone())
+            .map_err(|err| AppError::internal(format!("session_write body: {err}"))),
+    }
 }
 
 #[tauri::command]
@@ -195,4 +219,30 @@ pub async fn session_log_status(
     session_id: String,
 ) -> AppResult<LogStatus> {
     Ok(state.sessions.get(&session_id)?.log.status())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_input_from_a_raw_body() {
+        let body = InvokeBody::Raw(vec![0x1b, b'[', b'A']);
+        assert_eq!(input_bytes(&body).unwrap(), vec![0x1b, b'[', b'A']);
+    }
+
+    #[test]
+    fn still_reads_input_from_a_json_array() {
+        // The webview falls back to JSON where the custom protocol is not
+        // available, so this path cannot be dropped.
+        let body = InvokeBody::Json(serde_json::json!([104, 105]));
+        assert_eq!(input_bytes(&body).unwrap(), b"hi".to_vec());
+    }
+
+    #[test]
+    fn refuses_a_body_that_is_not_bytes() {
+        let body = InvokeBody::Json(serde_json::json!({ "data": "hi" }));
+        let err = input_bytes(&body).unwrap_err();
+        assert_eq!(err.code(), "INTERNAL");
+    }
 }
