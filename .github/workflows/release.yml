@@ -117,6 +117,9 @@ jobs:
     name: Build (${{ matrix.name }})
     needs: [verify, test]
     runs-on: ${{ matrix.os }}
+    # secrets cannot be used in a step `if`, so surface it as an env flag here.
+    env:
+      HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     strategy:
       # One platform failing must not cancel the others: a partial set of
       # installers on a draft is easier to finish than none.
@@ -174,7 +177,7 @@ jobs:
       # them on just for this build; the signing itself needs the secrets in
       # the tauri-action env below.
       - name: Enable updater artifacts
-        if: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        if: env.HAS_SIGNING_KEY == 'true'
         shell: bash
         run: >
           node -e "const f='src-tauri/tauri.conf.json';
