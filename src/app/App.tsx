@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { ConnectDialog, type ConnectRequest } from "@/components/ssh/ConnectDialog";
 import { HostKeyDialog } from "@/components/ssh/HostKeyDialog";
 import { SecretDialog } from "@/components/ssh/SecretDialog";
+import { PaneTree } from "@/components/terminal/PaneTree";
+import { paneHandle } from "@/components/terminal/registry";
 import { TabBar } from "@/components/terminal/TabBar";
-import { TerminalView } from "@/components/terminal/TerminalView";
 import { HostDialog } from "@/components/vault/HostDialog";
 import { ImportDialog, type ImportSource } from "@/components/vault/ImportDialog";
 import { SessionTree } from "@/components/vault/SessionTree";
@@ -24,15 +26,25 @@ import {
   type HostKeyAnswer,
   type SecretAnswer,
 } from "@/ipc/types";
+import {
+  actionFor,
+  chordFromEvent,
+  isTypingTarget,
+  resolveBindings,
+  type ActionId,
+} from "@/lib/keymap";
+import type { SplitDirection } from "@/lib/panes";
+import { toggleLog } from "@/lib/sessionLog";
 import { activePrompt, usePrompts } from "@/stores/prompts";
-import { useSessions } from "@/stores/sessions";
-import { applyThemeVariables, useTerminalTheme } from "@/stores/settings";
+import { focusedPane, paneForSession, useSessions, type Pane } from "@/stores/sessions";
+import { applyThemeVariables, useSettings, useTerminalTheme } from "@/stores/settings";
 import { selectedHost, useVault } from "@/stores/vault";
 
 /** Which modal, if any, is up. Only one is ever open at a time. */
 type Modal =
   | { kind: "none" }
   | { kind: "connect" }
+  | { kind: "settings" }
   | { kind: "host"; host: Host | null }
   | { kind: "import"; source: ImportSource };
 
@@ -43,6 +55,7 @@ export default function App() {
   const promptQueue = usePrompts((state) => state.queue);
   const vaultTree = useVault((state) => state.tree);
   const vaultError = useVault((state) => state.error);
+  const keymap = useSettings((state) => state.settings.keymap);
   const theme = useTerminalTheme();
   const [banner, setBanner] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>({ kind: "none" });
@@ -55,25 +68,44 @@ export default function App() {
     applyThemeVariables(theme, document.documentElement);
   }, [theme]);
 
-  const closeTab = useCallback(async (tabId: string) => {
-    const tab = useSessions.getState().tabs.find((candidate) => candidate.tabId === tabId);
-    // Drop the tab first so the UI stays responsive even if the child is slow
-    // to die; the backend kill is idempotent.
-    useSessions.getState().closeTab(tabId);
-    if (!tab?.sessionId) return;
-    try {
-      await sessionClose(tab.sessionId);
-    } catch {
-      // Already gone (it exited on its own) - nothing to clean up.
+  /** Kills the sessions behind a set of panes. The backend kill is idempotent. */
+  const closeSessions = useCallback(async (panes: Pane[]) => {
+    for (const pane of panes) {
+      if (!pane.sessionId) continue;
+      try {
+        await sessionClose(pane.sessionId);
+      } catch {
+        // Already gone (it exited on its own) - nothing to clean up.
+      }
     }
   }, []);
 
-  // Load the shell list and the vault, then open one local shell.
+  const closeTab = useCallback(
+    async (tabId: string) => {
+      // Drop the tab first so the UI stays responsive even if a child is slow
+      // to die.
+      await closeSessions(useSessions.getState().closeTab(tabId));
+    },
+    [closeSessions],
+  );
+
+  const closePane = useCallback(
+    async (tabId: string, paneId: string) => {
+      const pane = useSessions.getState().closePane(tabId, paneId);
+      if (pane) await closeSessions([pane]);
+    },
+    [closeSessions],
+  );
+
+  // Load the settings, the shell list and the vault, then open one local shell.
   useEffect(() => {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
 
     void (async () => {
+      // Settings first: the terminal is built with the font and scrollback
+      // from them, and rebuilding it afterwards would lose its session.
+      await useSettings.getState().load();
       try {
         useSessions.getState().setShells(await shellList());
       } catch (err) {
@@ -90,15 +122,15 @@ export default function App() {
   }, []);
 
   // The backend owns session lifetime: a shell that exits on its own (Ctrl+D,
-  // `exit`) closes its tab here.
+  // `exit`) closes its pane here.
   useEffect(() => {
     const unlisten = onSessionClosed((event) => {
       const state = useSessions.getState();
-      const tab = state.tabs.find((candidate) => candidate.sessionId === event.sessionId);
-      if (!tab) return;
+      const found = paneForSession(state.tabs, event.sessionId);
+      if (!found) return;
 
-      // A session that ended on purpose takes its tab with it. One that died -
-      // an SSH link that dropped, a pty that went away - keeps its tab, so the
+      // A session that ended on purpose takes its pane with it. One that died -
+      // an SSH link that dropped, a pty that went away - keeps its pane, so the
       // user is not left guessing which host just disappeared.
       const lost = event.reason === "error";
       state.markSessionClosed(
@@ -106,7 +138,7 @@ export default function App() {
         event.exitCode,
         lost ? "the connection was lost" : undefined,
       );
-      if (!lost) state.closeTab(tab.tabId);
+      if (!lost) state.closePane(found.tab.tabId, found.pane.paneId);
     });
     return () => {
       void unlisten.then((fn) => fn());
@@ -155,12 +187,14 @@ export default function App() {
   }, []);
 
   const saveHost = useCallback(
-    async (input: HostInput) => {
+    async (input: HostInput, themeId: string | null) => {
       const editing = modal.kind === "host" ? modal.host : null;
       setModal({ kind: "none" });
       try {
-        if (editing) await updateHost(editing.id, input);
-        else await createHost(input);
+        const saved = editing ? await updateHost(editing.id, input) : await createHost(input);
+        // The theme override is a preference, not vault data, so it is stored
+        // beside the rest of the settings and keyed by host id.
+        await useSettings.getState().setHostTheme(saved.id, themeId);
       } catch (err) {
         setBanner(`Could not save the host: ${errorMessage(err)}`);
       }
@@ -177,6 +211,7 @@ export default function App() {
     if (!window.confirm(`Delete ${host.name}? Any saved password goes too.`)) return;
     try {
       await deleteHost(host.id);
+      await useSettings.getState().setHostTheme(host.id, null);
       useVault.getState().select(null);
     } catch (err) {
       setBanner(`Could not delete the host: ${errorMessage(err)}`);
@@ -184,32 +219,104 @@ export default function App() {
     await useVault.getState().refresh();
   }, []);
 
-  // Global shortcuts. A full user-editable keymap lands in milestone 4.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || !event.shiftKey) return;
-      const key = event.key.toLowerCase();
-      if (key === "t") {
-        event.preventDefault();
-        useSessions.getState().openTab();
-      } else if (key === "n") {
-        event.preventDefault();
-        setModal({ kind: "connect" });
-      } else if (key === "e") {
-        event.preventDefault();
-        setSidebar((open) => !open);
-      } else if (key === "w") {
-        event.preventDefault();
-        const current = useSessions.getState().activeTabId;
-        if (current) void closeTab(current);
+  const splitFocused = useCallback((direction: SplitDirection) => {
+    const focused = focusedPane(useSessions.getState());
+    if (!focused) {
+      useSessions.getState().openTab();
+      return;
+    }
+    useSessions.getState().splitPane(focused.tab.tabId, focused.pane.paneId, direction);
+  }, []);
+
+  const runAction = useCallback(
+    (action: ActionId) => {
+      const sessions = useSessions.getState();
+      const focused = focusedPane(sessions);
+
+      switch (action) {
+        case "terminal.new":
+          sessions.openTab();
+          return;
+        case "terminal.newSsh":
+          setModal({ kind: "connect" });
+          return;
+        case "terminal.clear":
+          paneHandle(focused?.pane.paneId)?.clear();
+          return;
+        case "pane.close":
+          if (focused) void closePane(focused.tab.tabId, focused.pane.paneId);
+          return;
+        case "pane.splitRight":
+          splitFocused("row");
+          return;
+        case "pane.splitDown":
+          splitFocused("column");
+          return;
+        case "pane.next":
+          sessions.stepActivePane(1);
+          return;
+        case "pane.previous":
+          sessions.stepActivePane(-1);
+          return;
+        case "tab.next":
+          sessions.stepTab(1);
+          return;
+        case "tab.previous":
+          sessions.stepTab(-1);
+          return;
+        case "sessions.toggle":
+          setSidebar((open) => !open);
+          return;
+        case "search.open":
+          paneHandle(focused?.pane.paneId)?.openSearch();
+          return;
+        case "settings.open":
+          setModal({ kind: "settings" });
+          return;
+        case "log.toggle": {
+          const pane = focused?.pane;
+          if (!pane?.sessionId) {
+            setBanner("There is no live session in this pane to log.");
+            return;
+          }
+          void toggleLog(pane.sessionId, pane.title, pane.log?.active ?? false).then(setBanner);
+          return;
+        }
+        case "font.increase":
+          void useSettings.getState().setFontSize(useSettings.getState().settings.fontSize + 1);
+          return;
+        case "font.decrease":
+          void useSettings.getState().setFontSize(useSettings.getState().settings.fontSize - 1);
+          return;
+        case "font.reset":
+          void useSettings.getState().setFontSize(13);
+          return;
       }
+    },
+    [closePane, splitFocused],
+  );
+
+  // The keymap. Bindings come from the settings file, so a chord that is not
+  // bound to anything falls through to the terminal untouched.
+  useEffect(() => {
+    const bindings = resolveBindings(keymap);
+    const onKeyDown = (event: KeyboardEvent) => {
+      // A shortcut must not fire while a host name is being typed into a
+      // dialog. The terminal itself is not an exception: that is where these
+      // are used.
+      if (isTypingTarget(event.target)) return;
+      const action = actionFor(bindings, chordFromEvent(event));
+      if (action === null) return;
+      event.preventDefault();
+      runAction(action);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeTab]);
+  }, [keymap, runAction]);
 
   const prompt = activePrompt(promptQueue);
   const selected = useVault((state) => state.selected);
+  const hostThemes = useSettings((state) => state.settings.hostThemes);
 
   return (
     <div className="flex h-screen w-screen flex-col bg-[var(--hb-bg)] text-[var(--hb-fg)]">
@@ -221,7 +328,9 @@ export default function App() {
         onClose={(tabId) => void closeTab(tabId)}
         onNew={(shellId) => useSessions.getState().openTab({ kind: "local", shellId })}
         onNewSsh={() => setModal({ kind: "connect" })}
+        onSplit={splitFocused}
         onToggleSessions={() => setSidebar((open) => !open)}
+        onSettings={() => setModal({ kind: "settings" })}
         sessionsOpen={sidebar}
       />
 
@@ -321,11 +430,7 @@ export default function App() {
               className="absolute inset-0"
               style={{ display: tab.tabId === activeTabId ? "block" : "none" }}
             >
-              <TerminalView
-                tabId={tab.tabId}
-                target={tab.target}
-                visible={tab.tabId === activeTabId}
-              />
+              <PaneTree tab={tab} visible={tab.tabId === activeTabId} />
             </div>
           ))}
 
@@ -335,12 +440,17 @@ export default function App() {
             onCancel={() => setModal({ kind: "none" })}
           />
 
+          {modal.kind === "settings" && (
+            <SettingsDialog onClose={() => setModal({ kind: "none" })} />
+          )}
+
           {modal.kind === "host" && (
             <HostDialog
               host={modal.host}
               folders={vaultTree.folders}
               defaultFolderId={selected?.kind === "folder" ? selected.id : null}
-              onSave={(input) => void saveHost(input)}
+              themeId={modal.host ? (hostThemes[modal.host.id] ?? null) : null}
+              onSave={(input, themeId) => void saveHost(input, themeId)}
               onCancel={() => setModal({ kind: "none" })}
               onForgetSecrets={
                 modal.host

@@ -1,5 +1,7 @@
 import type { ITheme } from "@xterm/xterm";
 
+import type { ThemeSpec, UiColors } from "@/ipc/types";
+
 /**
  * A theme covers both the terminal palette and the app chrome, so switching
  * theme changes the whole window rather than leaving a dark UI wrapped around a
@@ -12,20 +14,11 @@ export interface Theme {
   id: string;
   label: string;
   kind: "dark" | "light";
-  ui: {
-    /** Window background, behind the terminal. */
-    bg: string;
-    /** Tab bar, menus, dialogs. */
-    panel: string;
-    /** Hover state on panel surfaces. */
-    hover: string;
-    border: string;
-    fg: string;
-    fgMuted: string;
-    accent: string;
-    danger: string;
-  };
+  /** Window background, tab bar, borders - see `UiColors`. */
+  ui: UiColors;
   xterm: ITheme;
+  /** Where an imported theme came from; absent for the built-in ones. */
+  source?: string;
 }
 
 function theme(
@@ -471,8 +464,44 @@ export const themes: Theme[] = [
 
 export const defaultThemeId = "harbour-dark";
 
-export function themeById(id: string): Theme {
-  return themes.find((t) => t.id === id) ?? themes[0];
+/**
+ * Turns a stored theme into one xterm will accept.
+ *
+ * Colours absent from the source scheme arrive as `null`, and xterm expects
+ * them to be missing entirely - handing it `null` makes it try to parse one.
+ */
+export function themeFromSpec(spec: ThemeSpec): Theme {
+  const xterm: ITheme = {};
+  for (const [key, value] of Object.entries(spec.xterm ?? {})) {
+    if (typeof value === "string" && value !== "") {
+      (xterm as Record<string, string>)[key] = value;
+    }
+  }
+  return {
+    id: spec.id,
+    label: spec.label,
+    kind: spec.kind === "light" ? "light" : "dark",
+    ui: spec.ui,
+    xterm,
+    source: spec.source ?? undefined,
+  };
+}
+
+/**
+ * The built-in themes followed by the imported ones. An imported theme cannot
+ * shadow a built-in: the backend namespaces the ids it mints.
+ */
+export function allThemes(custom: ThemeSpec[] = []): Theme[] {
+  const known = new Set(themes.map((theme) => theme.id));
+  const imported = custom
+    .filter((spec) => spec && typeof spec.id === "string" && !known.has(spec.id))
+    .map(themeFromSpec);
+  return [...themes, ...imported];
+}
+
+/** Resolves a theme id, falling back to the default rather than failing. */
+export function themeById(id: string, custom: ThemeSpec[] = []): Theme {
+  return allThemes(custom).find((theme) => theme.id === id) ?? themes[0];
 }
 
 /** Font stack that resolves to a real monospace face on all three platforms. */

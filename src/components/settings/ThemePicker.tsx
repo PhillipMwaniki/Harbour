@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { themes } from "@/lib/themes";
-import { useSettings } from "@/stores/settings";
+import { useSettings, useThemeCatalogue } from "@/stores/settings";
 
 /** Swatch showing a theme's background plus three representative colours. */
 function Swatch({ colors }: { colors: string[] }) {
@@ -15,8 +14,9 @@ function Swatch({ colors }: { colors: string[] }) {
 }
 
 export function ThemePicker() {
-  const themeId = useSettings((state) => state.themeId);
+  const themeId = useSettings((state) => state.settings.themeId);
   const setTheme = useSettings((state) => state.setTheme);
+  const themes = useThemeCatalogue();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -66,7 +66,7 @@ export function ThemePicker() {
                 theme.id === themeId ? "text-[var(--hb-accent)]" : "",
               ].join(" ")}
               onClick={() => {
-                setTheme(theme.id);
+                void setTheme(theme.id);
                 setOpen(false);
               }}
             >

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Folder, Host, HostInput } from "@/ipc/types";
+import { useThemeCatalogue } from "@/stores/settings";
 
 interface Props {
   /** The host being edited, or `null` when adding a new one. */
@@ -8,7 +9,9 @@ interface Props {
   folders: Folder[];
   /** Where a new host lands, when a folder is selected in the tree. */
   defaultFolderId: string | null;
-  onSave: (input: HostInput) => void;
+  /** The theme this host overrides the app theme with, if any. */
+  themeId?: string | null;
+  onSave: (input: HostInput, themeId: string | null) => void;
   onCancel: () => void;
   /** Only offered for an existing host that has something saved. */
   onForgetSecrets?: () => void;
@@ -28,6 +31,7 @@ export function HostDialog({
   host,
   folders,
   defaultFolderId,
+  themeId,
   onSave,
   onCancel,
   onForgetSecrets,
@@ -41,6 +45,8 @@ export function HostDialog({
   const [useAgent, setUseAgent] = useState(host?.auth.useAgent ?? true);
   const [keyPath, setKeyPath] = useState(host?.auth.keyPath ?? "");
   const [usePassword, setUsePassword] = useState(host?.auth.usePassword ?? true);
+  const [themeOverride, setThemeOverride] = useState(themeId ?? "");
+  const themes = useThemeCatalogue();
   const hostnameRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -68,7 +74,7 @@ export function HostDialog({
         keyPath: keyPath.trim() || null,
         usePassword,
       },
-    });
+    }, themeOverride || null);
   };
 
   return (
@@ -148,6 +154,26 @@ export function HostDialog({
             {folders.map((folder) => (
               <option key={folder.id} value={folder.id}>
                 {folder.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field
+          label="Theme"
+          htmlFor="host-theme"
+          hint="optional"
+        >
+          <select
+            id="host-theme"
+            value={themeOverride}
+            onChange={(event) => setThemeOverride(event.target.value)}
+            className={inputClass}
+          >
+            <option value="">(the app theme)</option>
+            {themes.map((theme) => (
+              <option key={theme.id} value={theme.id}>
+                {theme.label}
               </option>
             ))}
           </select>

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ThemePicker } from "@/components/settings/ThemePicker";
 import type { ShellSpec } from "@/ipc/types";
-import type { TerminalTab } from "@/stores/sessions";
+import { activePane, tabTitle, type TerminalTab } from "@/stores/sessions";
 
 interface Props {
   tabs: TerminalTab[];
@@ -12,18 +12,23 @@ interface Props {
   onClose: (tabId: string) => void;
   onNew: (shellId?: string) => void;
   onNewSsh: () => void;
+  onSplit: (direction: "row" | "column") => void;
   onToggleSessions: () => void;
+  onSettings: () => void;
   sessionsOpen: boolean;
 }
 
+/** What the hover tooltip says, which is where a dead pane explains itself. */
 function tabTooltip(tab: TerminalTab): string {
-  if (tab.error) return `${tab.title} - ${tab.error}`;
-  if (tab.status === "closed") {
-    return tab.exitCode !== null
-      ? `${tab.title} (exited ${tab.exitCode})`
-      : `${tab.title} (exited)`;
+  const title = tabTitle(tab);
+  const pane = activePane(tab);
+  if (!pane) return title;
+  if (pane.error) return `${title} - ${pane.error}`;
+  if (pane.status === "closed") {
+    return pane.exitCode !== null ? `${title} (exited ${pane.exitCode})` : `${title} (exited)`;
   }
-  return tab.title;
+  if (pane.log?.active) return `${title} - logging to ${pane.log.path}`;
+  return title;
 }
 
 export function TabBar({
@@ -34,7 +39,9 @@ export function TabBar({
   onClose,
   onNew,
   onNewSsh,
+  onSplit,
   onToggleSessions,
+  onSettings,
   sessionsOpen,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -65,6 +72,8 @@ export function TabBar({
       <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
         {tabs.map((tab) => {
           const active = tab.tabId === activeTabId;
+          const pane = activePane(tab);
+          const title = tabTitle(tab);
           return (
             <div
               key={tab.tabId}
@@ -81,20 +90,25 @@ export function TabBar({
               className={[
                 "group flex min-w-32 max-w-56 cursor-pointer items-center gap-2 border-r border-[var(--hb-border)] px-3 text-xs",
                 active ? "bg-[var(--hb-bg)]" : "hover:bg-[var(--hb-hover)]",
-                tab.status === "closed" ? "italic text-[var(--hb-fg-muted)]" : "",
+                pane?.status === "closed" ? "italic text-[var(--hb-fg-muted)]" : "",
               ].join(" ")}
               title={tabTooltip(tab)}
             >
-              {tab.status === "starting" && (
+              {pane?.status === "starting" && (
                 <span
                   aria-hidden
                   className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--hb-accent)]"
                 />
               )}
-              <span className="truncate">{tab.title}</span>
+              {pane?.log?.active && (
+                <span aria-hidden title="Logging" className="shrink-0 text-[var(--hb-accent)]">
+                  &#9679;
+                </span>
+              )}
+              <span className="truncate">{title}</span>
               <button
                 type="button"
-                aria-label={`Close ${tab.title}`}
+                aria-label={`Close ${title}`}
                 className="ml-auto shrink-0 rounded px-1 text-[var(--hb-fg-muted)] opacity-0 hover:bg-[var(--hb-hover)] hover:text-[var(--hb-fg)] group-hover:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation();
@@ -141,6 +155,28 @@ export function TabBar({
               SSH connection&hellip;
               <span className="ml-2 text-[var(--hb-fg-muted)]">Ctrl+Shift+N</span>
             </button>
+            <button
+              type="button"
+              className="block w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--hb-hover)]"
+              onClick={() => {
+                setMenuOpen(false);
+                onSplit("row");
+              }}
+            >
+              Split right
+              <span className="ml-2 text-[var(--hb-fg-muted)]">Ctrl+Shift+D</span>
+            </button>
+            <button
+              type="button"
+              className="block w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--hb-hover)]"
+              onClick={() => {
+                setMenuOpen(false);
+                onSplit("column");
+              }}
+            >
+              Split down
+              <span className="ml-2 text-[var(--hb-fg-muted)]">Ctrl+Shift+B</span>
+            </button>
             <div className="my-1 border-t border-[var(--hb-border)]" />
 
             {shells.length === 0 && (
@@ -167,6 +203,16 @@ export function TabBar({
       </div>
 
       <ThemePicker />
+
+      <button
+        type="button"
+        aria-label="Settings"
+        title="Settings (Ctrl+,)"
+        className="border-l border-[var(--hb-border)] px-3 text-xs hover:bg-[var(--hb-hover)]"
+        onClick={onSettings}
+      >
+        &#9881;
+      </button>
     </div>
   );
 }

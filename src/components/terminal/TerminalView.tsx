@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -17,11 +18,16 @@ import {
 import { sshConnect } from "@/ipc/ssh";
 import { hostConnect } from "@/ipc/vault";
 import { errorMessage, type SessionInfo } from "@/ipc/types";
-import { defaultFontFamily } from "@/lib/themes";
+import { compileRules } from "@/lib/highlight";
+import { actionFor, chordFromEvent, resolveBindings } from "@/lib/keymap";
+import { startLog } from "@/lib/sessionLog";
+import { defaultFontFamily, type Theme } from "@/lib/themes";
 import { useSessions, type SessionTarget } from "@/stores/sessions";
-import { useTerminalTheme } from "@/stores/settings";
+import { themeForHost, useSettings } from "@/stores/settings";
+import { HighlightLayer } from "./highlightLayer";
+import { registerPane } from "./registry";
+import { SearchBar, type SearchOptions } from "./SearchBar";
 
-const SCROLLBACK = 10_000;
 const encoder = new TextEncoder();
 
 function isWindows(): boolean {
@@ -30,12 +36,17 @@ function isWindows(): boolean {
 
 interface Props {
   tabId: string;
+  paneId: string;
   target: SessionTarget;
+  /** Whether this pane's tab is the one on screen. */
   visible: boolean;
+  /** Whether it is the focused pane of that tab. */
+  focused: boolean;
+  onFocus: () => void;
 }
 
 /**
- * Opens the session this tab is for, at the size the terminal has measured.
+ * Opens the session this pane is for, at the size the terminal has measured.
  *
  * Both transports are opened the same way and at the same moment for the same
  * reason: the remote (or the pty) must be told the real window size before it
@@ -52,24 +63,54 @@ function openSession(target: SessionTarget, cols: number, rows: number): Promise
   }
 }
 
+/** Search highlight colours, taken from the theme so they stay readable. */
+function searchDecorations(theme: Theme) {
+  return {
+    matchBackground: theme.ui.hover,
+    matchBorder: theme.ui.border,
+    matchOverviewRuler: theme.ui.fgMuted,
+    activeMatchBackground: theme.ui.accent,
+    activeMatchBorder: theme.ui.accent,
+    activeMatchColorOverviewRuler: theme.ui.accent,
+  };
+}
+
 /**
  * One xterm.js instance, which owns the lifetime of one backend session.
  *
  * The terminal opens the session itself, after measuring, so the pty starts at
- * the size it will actually be rendered at - see the note on `TerminalTab`.
+ * the size it will actually be rendered at - see the note on `Pane`.
  *
- * The instance is kept alive for the life of the tab: hiding a tab must not
+ * The instance is kept alive for the life of the pane: hiding a tab must not
  * unmount this component, or scrollback and viewport state are lost. The
  * parent hides it with `display: none` instead.
  */
-export function TerminalView({ tabId, target, visible }: Props) {
+export function TerminalView({ tabId, paneId, target, visible, focused, onFocus }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const theme = useTerminalTheme();
-  // Read inside the mount effect without making the session depend on it.
+  const searchRef = useRef<SearchAddon | null>(null);
+  const highlightRef = useRef<HighlightLayer | null>(null);
+
+  const settings = useSettings((state) => state.settings);
+  const theme = useMemo(
+    () => themeForHost(settings, target.kind === "host" ? target.hostId : null),
+    [settings, target],
+  );
+  const { rules } = useMemo(() => compileRules(settings.highlights), [settings.highlights]);
+  const bindings = useMemo(() => resolveBindings(settings.keymap), [settings.keymap]);
+
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [results, setResults] = useState<{ index: number; count: number } | null>(null);
+  const [badPattern, setBadPattern] = useState(false);
+
+  // Read inside the mount effect without making the session depend on them.
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const bindingsRef = useRef(bindings);
+  bindingsRef.current = bindings;
   // The target is a fresh object on every render; keeping it out of the effect
   // deps is what stops a re-render from tearing down a live session.
   const targetRef = useRef(target);
@@ -79,13 +120,14 @@ export function TerminalView({ tabId, target, visible }: Props) {
     const host = hostRef.current;
     if (!host) return;
 
+    const initial = settingsRef.current;
     const term = new Terminal({
       allowProposedApi: true,
-      fontFamily: defaultFontFamily,
-      fontSize: 13,
+      fontFamily: initial.fontFamily || defaultFontFamily,
+      fontSize: initial.fontSize,
       lineHeight: 1.2,
       cursorBlink: true,
-      scrollback: SCROLLBACK,
+      scrollback: initial.scrollback,
       theme: themeRef.current.xterm,
       macOptionIsMeta: true,
       // ConPTY rewrites the screen on resize; telling xterm about it keeps
@@ -94,7 +136,9 @@ export function TerminalView({ tabId, target, visible }: Props) {
     });
 
     const fit = new FitAddon();
+    const search = new SearchAddon();
     term.loadAddon(fit);
+    term.loadAddon(search);
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
     term.loadAddon(
@@ -104,6 +148,13 @@ export function TerminalView({ tabId, target, visible }: Props) {
         void openUrl(uri).catch(() => {});
       }),
     );
+
+    // A chord the keymap claims belongs to Harbour, not to the shell.
+    // Without this, Ctrl+Shift+[ would move the focus *and* send an escape.
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") return true;
+      return actionFor(bindingsRef.current, chordFromEvent(event)) === null;
+    });
 
     term.open(host);
 
@@ -117,16 +168,23 @@ export function TerminalView({ tabId, target, visible }: Props) {
       // DOM renderer stays active.
     }
 
+    const highlight = new HighlightLayer(term);
     termRef.current = term;
     fitRef.current = fit;
+    searchRef.current = search;
+    highlightRef.current = highlight;
     fit.fit();
 
     // Built once the session id exists; until then there is nothing to ack.
     let acker: OutputAcker | null = null;
     const disposables = [
       term.onTitleChange((title) => {
-        if (title) useSessions.getState().setTitle(tabId, title);
+        if (title) useSessions.getState().setTitle(tabId, paneId, title);
       }),
+      search.onDidChangeResults((found) =>
+        setResults({ index: found.resultIndex, count: found.resultCount }),
+      ),
+      term.onRender(() => highlight.refresh()),
     ];
     let disposed = false;
 
@@ -134,7 +192,16 @@ export function TerminalView({ tabId, target, visible }: Props) {
       try {
         const info = await openSession(targetRef.current, term.cols, term.rows);
         if (disposed) return;
-        useSessions.getState().attachSession(tabId, info);
+        useSessions.getState().attachSession(tabId, paneId, info);
+
+        // "Log every session" has to start here rather than in the keymap:
+        // this is the first moment the session exists and has a title.
+        if (settingsRef.current.logging.autoStart) {
+          void startLog(info.sessionId, info.title).catch(() => {
+            // A log that will not open must not take the session with it; the
+            // pane simply shows no log marker.
+          });
+        }
 
         disposables.push(
           term.onData((data) => {
@@ -165,7 +232,7 @@ export function TerminalView({ tabId, target, visible }: Props) {
       } catch (err) {
         if (disposed) return;
         const message = errorMessage(err);
-        useSessions.getState().failTab(tabId, message);
+        useSessions.getState().failPane(tabId, paneId, message);
         term.writeln(`\r\n\x1b[31m${message}\x1b[0m`);
       }
     })();
@@ -175,22 +242,51 @@ export function TerminalView({ tabId, target, visible }: Props) {
     });
     observer.observe(host);
 
+    const unregister = registerPane(paneId, {
+      focus: () => term.focus(),
+      fit: () => fit.fit(),
+      clear: () => term.clear(),
+      openSearch: () => setSearchOpen(true),
+      closeSearch: () => setSearchOpen(false),
+      selection: () => term.getSelection(),
+    });
+
     return () => {
       disposed = true;
+      unregister();
       observer.disconnect();
       acker?.dispose();
       for (const d of disposables) d.dispose();
+      highlight.dispose();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      searchRef.current = null;
+      highlightRef.current = null;
     };
-  }, [tabId]);
+  }, [tabId, paneId]);
 
-  // Theme changes must not tear down the session, so they are applied to the
-  // live instance rather than being part of its construction.
+  // Appearance changes must not tear down the session, so they are applied to
+  // the live instance rather than being part of its construction.
   useEffect(() => {
-    if (termRef.current) termRef.current.options.theme = theme.xterm;
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme = theme.xterm;
   }, [theme]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontFamily = settings.fontFamily || defaultFontFamily;
+    term.options.fontSize = settings.fontSize;
+    term.options.scrollback = settings.scrollback;
+    // The cell size changed, so the pty needs the new dimensions.
+    fitRef.current?.fit();
+  }, [settings.fontFamily, settings.fontSize, settings.scrollback]);
+
+  useEffect(() => {
+    highlightRef.current?.setRules(rules);
+  }, [rules]);
 
   // A hidden terminal has no layout, so it cannot be measured. Refit and focus
   // when it comes back into view.
@@ -198,16 +294,64 @@ export function TerminalView({ tabId, target, visible }: Props) {
     if (!visible) return;
     const id = requestAnimationFrame(() => {
       fitRef.current?.fit();
-      termRef.current?.focus();
+      if (focused && !searchOpen) termRef.current?.focus();
     });
     return () => cancelAnimationFrame(id);
-  }, [visible]);
+  }, [visible, focused, searchOpen]);
+
+  const find = useCallback((query: string, options: SearchOptions, forward: boolean) => {
+    const search = searchRef.current;
+    if (!search) return;
+    if (query === "") {
+      search.clearDecorations();
+      setResults(null);
+      setBadPattern(false);
+      return;
+    }
+    const settings = {
+      ...options,
+      incremental: false,
+      decorations: searchDecorations(themeRef.current),
+    };
+    try {
+      if (forward) search.findNext(query, settings);
+      else search.findPrevious(query, settings);
+      setBadPattern(false);
+    } catch {
+      // An unfinished regular expression is the normal state of one being
+      // typed; say so in the bar rather than throwing out of a keystroke.
+      setBadPattern(true);
+      setResults(null);
+    }
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    searchRef.current?.clearDecorations();
+    setSearchOpen(false);
+    setResults(null);
+    setBadPattern(false);
+    termRef.current?.focus();
+  }, []);
 
   return (
     <div
-      ref={hostRef}
-      className="h-full w-full overflow-hidden px-2 py-1"
-      data-testid={`terminal-${tabId}`}
-    />
+      className="relative h-full w-full overflow-hidden"
+      onMouseDown={onFocus}
+      data-testid={`pane-${paneId}`}
+    >
+      <div
+        ref={hostRef}
+        className="h-full w-full overflow-hidden px-2 py-1"
+        data-testid={`terminal-${paneId}`}
+      />
+      {searchOpen && (
+        <SearchBar
+          onFind={find}
+          onClose={closeSearch}
+          results={results}
+          invalid={badPattern}
+        />
+      )}
+    </div>
   );
 }

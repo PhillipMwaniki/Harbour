@@ -50,15 +50,19 @@ describe("HostDialog", () => {
     await typing().type(screen.getByLabelText("Username"), "deploy");
     await typing().click(screen.getByRole("button", { name: "Save" }));
 
-    expect(onSave).toHaveBeenCalledWith({
-      folderId: null,
-      name: "web.example.com",
-      hostname: "web.example.com",
-      port: 22,
-      username: "deploy",
-      description: null,
-      auth: { useAgent: true, keyPath: null, usePassword: true },
-    });
+    expect(onSave).toHaveBeenCalledWith(
+      {
+        folderId: null,
+        name: "web.example.com",
+        hostname: "web.example.com",
+        port: 22,
+        username: "deploy",
+        description: null,
+        auth: { useAgent: true, keyPath: null, usePassword: true },
+      },
+      // No theme override: the host looks like everything else.
+      null,
+    );
   });
 
   it("loads an existing host into the form", () => {
