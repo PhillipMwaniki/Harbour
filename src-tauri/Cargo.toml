@@ -1,0 +1,43 @@
+[package]
+name = "harbour"
+version = "0.1.0"
+description = "Cross-platform SSH client, terminal and SFTP file manager"
+authors = ["Harbour contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.82"
+
+# The library is what integration tests and the mobile targets link against;
+# `harbour_lib` avoids a name clash with the Windows executable.
+[lib]
+name = "harbour_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+portable-pty = "0.9"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+[features]
+# Enables the webview devtools in release builds; off by default.
+devtools = ["tauri/devtools"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+# Deliberately *not* panic = "abort": a panicking session task must be
+# containable (see docs/architecture.md), not fatal to the whole app.
+strip = true

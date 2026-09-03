@@ -1,0 +1,41 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+:root {
+  color-scheme: dark;
+
+  /* Overwritten at runtime by applyThemeVariables(); these are the
+     Harbour Dark values so the very first paint is already themed. */
+  --hb-bg: #0b1220;
+  --hb-panel: #111a2b;
+  --hb-hover: #1b2740;
+  --hb-border: #1e293b;
+  --hb-fg: #d7dce5;
+  --hb-fg-muted: #64748b;
+  --hb-accent: #5eead4;
+  --hb-danger: #f87171;
+}
+
+html,
+body,
+#root {
+  background: var(--hb-bg);
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* The webview must not feel like a browser: no text selection chrome outside
+   the terminal, no rubber-band scrolling, no native context menu surprises. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.xterm,
+.xterm * {
+  user-select: text;
+  -webkit-user-select: text;
+}
