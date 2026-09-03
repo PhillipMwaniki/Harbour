@@ -206,7 +206,7 @@ async fn authenticate<A: Asker>(
         } => remaining_methods,
     };
 
-    let mut tried: Vec<&'static str> = Vec::new();
+    let mut tried: Vec<String> = Vec::new();
     let mut refused: Vec<&'static str> = Vec::new();
 
     for choice in methods {
@@ -214,10 +214,23 @@ async fn authenticate<A: Asker>(
             refused.push(choice.describe());
             continue;
         }
-        tried.push(choice.describe());
+        tried.push(choice.describe().to_string());
 
         let outcome = match choice {
-            AuthChoice::Agent => authenticate_with_agent(session, target).await?,
+            // No agent, an agent that hung up, or one holding nothing: the
+            // method failed, and the next one is tried - exactly what `ssh`
+            // does. Only a failure *talking to the server* stops the attempt.
+            AuthChoice::Agent => match authenticate_with_agent(session, target).await {
+                Ok(outcome) => outcome,
+                Err(AppError::SshAgent(reason)) => {
+                    tracing::debug!(reason = %reason, "ssh agent unusable; trying the next method");
+                    if let Some(last) = tried.last_mut() {
+                        *last = format!("agent ({reason})");
+                    }
+                    Outcome::Failure(remaining.clone())
+                }
+                Err(err) => return Err(err),
+            },
             AuthChoice::Key { path } => authenticate_with_key(session, target, path, asker).await?,
             AuthChoice::Password => authenticate_with_password(session, target, asker).await?,
             AuthChoice::KeyboardInteractive => {
@@ -256,7 +269,7 @@ fn method_kind(choice: &AuthChoice) -> MethodKind {
 /// The message a user gets when nothing worked. "Authentication failed" alone
 /// is useless when the real problem is that the server never offered the
 /// method they configured.
-fn describe_failure(tried: &[&str], refused: &[&str], remaining: &MethodSet) -> String {
+fn describe_failure(tried: &[String], refused: &[&str], remaining: &MethodSet) -> String {
     let mut parts = Vec::new();
     if !tried.is_empty() {
         parts.push(format!("tried {}", tried.join(", ")));
@@ -594,7 +607,7 @@ mod tests {
     #[test]
     fn a_method_the_server_never_offered_is_named_as_such() {
         let message = describe_failure(
-            &["publickey"],
+            &["publickey".to_string()],
             &["password"],
             &methods(&[MethodKind::PublicKey]),
         );

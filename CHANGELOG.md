@@ -181,6 +181,12 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Fixed
 
+- Connecting to a saved host failed outright with "no usable ssh agent" on a
+  machine whose agent was absent, had hung up, or held no keys. The agent step
+  is tried first for every host, and an error from it ended the attempt
+  instead of moving on to the next method as `ssh` does. It is now a failed
+  method like any other: the password prompt follows, and if nothing works the
+  message still names what the agent said.
 - The Xshell import found nothing in a real export. Xshell writes its files as
   UTF-16LE with a byte order mark; they were read as UTF-8, so every section
   header came out as `[\0C\0O\0N…` and every file was skipped with "no

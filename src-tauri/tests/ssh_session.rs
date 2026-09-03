@@ -549,6 +549,50 @@ async fn refusing_a_host_key_aborts_the_connection() {
     );
 }
 
+/// The agent is the first thing tried for every saved host. A machine with
+/// no agent, or one whose agent has hung up, must still get to the password
+/// prompt - as it would with `ssh` - rather than failing the connection on
+/// the spot.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unusable_agent_is_skipped_and_the_next_method_tried() {
+    let server = start_server().await;
+    let asker = ScriptedAsker::trusting(PASSWORD);
+
+    // Whatever agent this machine has, the test server refuses every public
+    // key, so the agent step can only ever fail - by being absent, by holding
+    // nothing, or by being rejected. All three must lead to the password.
+    let connected = client::connect(
+        request(server.addr, vec![AuthChoice::Agent, AuthChoice::Password]),
+        Arc::clone(&asker),
+        Arc::new(temp_known_hosts()),
+        |_, _| {},
+    )
+    .await
+    .expect("the connection should fall through to the password");
+
+    assert_eq!(connected.method, "password");
+    assert_eq!(asker.secret_questions().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_only_attempt_that_fails_says_why() {
+    let server = start_server().await;
+
+    let err = client::connect(
+        request(server.addr, vec![AuthChoice::Agent]),
+        ScriptedAsker::trusting(PASSWORD),
+        Arc::new(temp_known_hosts()),
+        |_, _| {},
+    )
+    .await
+    .expect_err("nothing but a refused agent cannot succeed");
+
+    assert_eq!(err.code(), "SSH_AUTH_FAILED");
+    let message = err.to_string();
+    assert!(message.contains("agent"), "{message}");
+    assert!(message.contains("server accepts"), "{message}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wrong_password_is_an_authentication_failure() {
     let server = start_server().await;
