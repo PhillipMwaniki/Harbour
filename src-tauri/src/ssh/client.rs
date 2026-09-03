@@ -338,6 +338,7 @@ async fn authenticate_with_key<A: Asker>(
                     label: format!("Passphrase for {path}"),
                     instruction: String::new(),
                     echo: false,
+                    can_remember: false,
                 })
                 .await?;
             let Some(passphrase) = answer.secret else {
@@ -383,6 +384,7 @@ async fn authenticate_with_password<A: Asker>(
             label: format!("Password for {}", target.label()),
             instruction: String::new(),
             echo: false,
+            can_remember: false,
         })
         .await?;
     let Some(password) = answer.secret else {
@@ -442,6 +444,7 @@ async fn authenticate_interactively<A: Asker>(
                             label: prompt.prompt.trim().to_string(),
                             instruction: instruction.clone(),
                             echo: prompt.echo,
+                            can_remember: false,
                         })
                         .await?;
                     let Some(secret) = answer.secret else {

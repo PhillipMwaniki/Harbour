@@ -57,9 +57,12 @@ describe("connectionRespond", () => {
   });
 
   it("carries a cancelled secret as null", async () => {
-    await connectionRespond("p2", { secret: null });
+    await connectionRespond("p2", { secret: null, remember: false });
 
-    expect(invoke.mock.calls[0][1]).toEqual({ promptId: "p2", answer: { secret: null } });
+    expect(invoke.mock.calls[0][1]).toEqual({
+      promptId: "p2",
+      answer: { secret: null, remember: false },
+    });
   });
 });
 

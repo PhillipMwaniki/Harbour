@@ -15,6 +15,7 @@ import {
   sessionWrite,
 } from "@/ipc/session";
 import { sshConnect } from "@/ipc/ssh";
+import { hostConnect } from "@/ipc/vault";
 import { errorMessage, type SessionInfo } from "@/ipc/types";
 import { defaultFontFamily } from "@/lib/themes";
 import { useSessions, type SessionTarget } from "@/stores/sessions";
@@ -41,10 +42,14 @@ interface Props {
  * draws its first prompt.
  */
 function openSession(target: SessionTarget, cols: number, rows: number): Promise<SessionInfo> {
-  if (target.kind === "ssh") {
-    return sshConnect({ target: target.target, methods: target.methods, cols, rows });
+  switch (target.kind) {
+    case "host":
+      return hostConnect(target.hostId, cols, rows);
+    case "ssh":
+      return sshConnect({ target: target.target, methods: target.methods, cols, rows });
+    case "local":
+      return sessionOpen({ shellId: target.shellId, cols, rows });
   }
-  return sessionOpen({ shellId: target.shellId, cols, rows });
 }
 
 /**

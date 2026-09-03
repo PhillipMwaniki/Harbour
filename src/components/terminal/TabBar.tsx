@@ -12,6 +12,8 @@ interface Props {
   onClose: (tabId: string) => void;
   onNew: (shellId?: string) => void;
   onNewSsh: () => void;
+  onToggleSessions: () => void;
+  sessionsOpen: boolean;
 }
 
 function tabTooltip(tab: TerminalTab): string {
@@ -32,6 +34,8 @@ export function TabBar({
   onClose,
   onNew,
   onNewSsh,
+  onToggleSessions,
+  sessionsOpen,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -47,6 +51,17 @@ export function TabBar({
 
   return (
     <div className="flex h-9 shrink-0 items-stretch border-b border-[var(--hb-border)] bg-[var(--hb-panel)] text-[var(--hb-fg)]">
+      <button
+        type="button"
+        aria-label="Toggle sessions"
+        aria-pressed={sessionsOpen}
+        title="Sessions (Ctrl+Shift+E)"
+        className="border-r border-[var(--hb-border)] px-3 text-xs hover:bg-[var(--hb-hover)]"
+        onClick={onToggleSessions}
+      >
+        &#9776;
+      </button>
+
       <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
         {tabs.map((tab) => {
           const active = tab.tabId === activeTabId;

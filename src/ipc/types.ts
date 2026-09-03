@@ -87,6 +87,11 @@ export interface SecretPrompt {
   instruction: string;
   /** True only when the server says the answer is not a secret. */
   echo: boolean;
+  /**
+   * Whether there is anywhere to save this answer: a saved host to attach it
+   * to, on a machine with a usable keychain. False for an ad-hoc connection.
+   */
+  canRemember: boolean;
 }
 
 export interface HostKeyAnswer {
@@ -97,6 +102,83 @@ export interface HostKeyAnswer {
 export interface SecretAnswer {
   /** `null` means the user dismissed the prompt. */
   secret: string | null;
+  /** Save it in the OS keychain. Only ever set when `canRemember` was true. */
+  remember: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Vault
+// ---------------------------------------------------------------------------
+
+export interface Folder {
+  id: string;
+  /** `null` for a top-level folder. */
+  parentId: string | null;
+  name: string;
+  position: number;
+}
+
+/** Which methods a saved host authenticates with, and in what order. */
+export interface HostAuth {
+  useAgent: boolean;
+  keyPath: string | null;
+  usePassword: boolean;
+}
+
+export interface Host {
+  id: string;
+  folderId: string | null;
+  name: string;
+  hostname: string;
+  port: number;
+  username: string;
+  description: string | null;
+  auth: HostAuth;
+  /** Whether the OS keychain is expected to hold a password for this host. */
+  hasSavedPassword: boolean;
+  position: number;
+}
+
+/** The fields a caller may set; ids and positions belong to the store. */
+export interface HostInput {
+  folderId: string | null;
+  name: string;
+  hostname: string;
+  port: number;
+  username: string;
+  description: string | null;
+  auth: HostAuth;
+}
+
+export interface VaultTree {
+  folders: Folder[];
+  hosts: Host[];
+}
+
+/** One host an import found, and whether it can be brought across. */
+export interface ImportCandidate {
+  name: string;
+  folder: string[];
+  hostname: string;
+  port: number;
+  username: string | null;
+  description: string | null;
+  keyPath: string | null;
+  usesPassword: boolean;
+  /** Set when it cannot be imported, saying why. */
+  skipReason: string | null;
+}
+
+export interface ImportPreview {
+  candidates: ImportCandidate[];
+  /** Anything the user should know that is not about one host. */
+  notes: string[];
+  source: string;
+}
+
+export interface ImportResult {
+  hosts: number;
+  skipped: number;
 }
 
 /** Stable error codes; see `AppError::code` on the Rust side. */
@@ -115,6 +197,10 @@ export type AppErrorCode =
   | "SSH_AGENT_UNAVAILABLE"
   | "SSH_CHANNEL_FAILED"
   | "SSH_PROTOCOL_ERROR"
+  | "HOST_NOT_FOUND"
+  | "FOLDER_NOT_FOUND"
+  | "VAULT_ERROR"
+  | "KEYRING_UNAVAILABLE"
   | "PROMPT_NOT_FOUND"
   | "PROMPT_TIMED_OUT"
   | "INTERNAL";

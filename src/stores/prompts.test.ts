@@ -25,6 +25,7 @@ function secret(promptId: string): PendingPrompt {
     label: "Password for deploy@example.com",
     instruction: "",
     echo: false,
+    canRemember: false,
   };
   return { type: "secret", prompt };
 }

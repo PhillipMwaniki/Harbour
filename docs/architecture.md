@@ -8,7 +8,8 @@ rendering surface, not a place where privileged work happens.
 React frontend (webview)
   TabBar - TerminalView(s) - ConnectDialog, HostKeyDialog, SecretDialog
            [SftpPane, TransferQueue: milestone 5+]
-  Zustand stores: sessions, prompts, ui
+  SessionTree - HostDialog, ImportDialog
+  Zustand stores: sessions, prompts, vault, ui
         |  invoke() / listen() / Channel<bytes>
 Rust core
   commands/  thin handlers: validate, dispatch, no logic
@@ -21,8 +22,12 @@ Rust core
              known_hosts.rs (trust, and nothing else)
              agent.rs       (SSH_AUTH_SOCK / OpenSSH pipe / Pageant)
   prompt.rs  round-trip questions to the user
-  vault/     host storage and imports
-             xshell.rs (.xsh session import; SQLite store lands in ms 3)
+  vault/     saved hosts, and the imports that fill them
+             store.rs      (SQLite: folders and hosts, no secrets)
+             secrets.rs    (OS keychain: passwords and passphrases)
+             ssh_config.rs (~/.ssh/config)
+             xshell.rs     (.xsh export directories)
+             import.rs     (both sources -> reviewable candidates)
   telemetry.rs  tracing -> rotating file, never secrets
 ```
 
@@ -66,7 +71,11 @@ a session cannot be allowed to block on a host that has stopped answering.
    into a dialog and it goes straight to the authentication attempt that asked
    for it: no store, no log line, no retention past the attempt. Nothing sends
    a secret *to* the webview, ever.
-8. **A question to the user is a round trip, not an argument.** The core cannot
+8. **The database and the keychain are separate on purpose.** SQLite holds the
+   tree; the OS keychain holds the secrets, addressed by host id. Neither
+   contains the other's data, so a copied vault file is not a credential leak
+   and a keychain entry on its own names nothing.
+9. **A question to the user is a round trip, not an argument.** The core cannot
    know in advance whether a host key is unknown or what a server will ask for,
    so `prompt.rs` parks the connection on a `oneshot` and emits an event. A
    prompt nobody answers times out; a dropped attempt deregisters its own
@@ -82,6 +91,7 @@ a session cannot be allowed to block on a host that has stopped answering.
 | Output pump (batching, backpressure) | tokio task on Tauri's runtime |
 | Command handlers | tokio tasks; `shell_list` uses `spawn_blocking` |
 | Local writes and resizes | caller's task, holding a short-lived `parking_lot` lock |
+| Vault and keychain calls | `spawn_blocking`; SQLite is synchronous and macOS can prompt |
 | SSH channel reader | tokio task, one per session |
 | SSH channel writer, holding the session handle | tokio task, one per session |
 | russh session event loop | tokio task, spawned by russh |
@@ -102,11 +112,10 @@ The theme system is frontend-only: `src/lib/themes.ts` holds the catalogue and
 `src/stores/settings.ts` publishes the chrome colours as `--hb-*` CSS custom
 properties. Nothing about a theme crosses the IPC boundary.
 
-Milestone 2 covers SSH shells. Hosts are described by hand in the connect
-dialog and nothing about them is saved: the SQLite vault, the session tree and
-the keyring land in milestone 3, and `AuthChoice` lists will come from there
-rather than from a form. Host certificates, agent forwarding and port
-forwarding are later still.
+Milestone 3 covers saved hosts. What the vault does not do yet: reordering
+within a folder (positions exist, nothing sets them), a master password, and
+encrypted export - the last two are milestone 8. Host certificates, agent
+forwarding and port forwarding are later still.
 
 SFTP, transfers and the fleet runner each add a sibling module under
 `src-tauri/src/`, and the `SessionKind` enum grows a variant per transport. The

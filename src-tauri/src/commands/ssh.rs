@@ -52,10 +52,7 @@ pub async fn ssh_connect(
     let exit_manager = state.sessions.clone();
     let exit_app = app.clone();
 
-    let asker = Arc::new(EventAsker {
-        app: app.clone(),
-        prompts: Arc::clone(&state.prompts),
-    });
+    let asker = Arc::new(EventAsker::new(app.clone(), Arc::clone(&state.prompts)));
 
     let label = target.label();
     let connected = client::connect(
@@ -121,9 +118,18 @@ fn default_methods() -> Vec<AuthChoice> {
 
 /// Asks the user through the webview, by emitting an event and waiting for the
 /// matching `connection_respond`.
-struct EventAsker {
+///
+/// Shared with the vault, which wraps it so a saved host can answer from the
+/// keychain before falling back to asking.
+pub struct EventAsker {
     app: AppHandle,
     prompts: Arc<Prompts>,
+}
+
+impl EventAsker {
+    pub fn new(app: AppHandle, prompts: Arc<Prompts>) -> Self {
+        Self { app, prompts }
+    }
 }
 
 #[derive(Clone, Serialize)]

@@ -7,12 +7,13 @@ no account, no cloud, credentials never leave the machine unencrypted.
 Harbour is an Xshell + Xftp replacement for teams that live on Windows but ship
 to Linux, and it runs the same on macOS and Linux.
 
-> **Status: milestone 2 of 9.** Local shells and SSH both work end to end -
-> tabs, ConPTY and forkpty, remote shells over `russh` with agent, key and
-> password auth, host key verification against your existing `known_hosts`,
-> batched output with real backpressure, and a themed UI with eleven built-in
-> colour schemes. The session vault, SFTP and transfers are next. See
-> [the roadmap](#roadmap).
+> **Status: milestone 3 of 9.** Local shells, SSH and the session manager all
+> work end to end - tabs, ConPTY and forkpty, remote shells over `russh` with
+> agent, key and password auth, host key verification against your existing
+> `known_hosts`, saved hosts in a folder tree with passwords in the OS
+> keychain, imports from `~/.ssh/config` and Xshell, batched output with real
+> backpressure, and a themed UI with eleven built-in colour schemes. Terminal
+> polish, SFTP and transfers are next. See [the roadmap](#roadmap).
 
 ## Requirements
 
@@ -62,8 +63,37 @@ its SHA-256 fingerprint and offers to remember it; a changed key shows both
 fingerprints and defaults to rejecting. Harbour never writes to your OpenSSH
 files: keys it learns go to its own `known_hosts` in the app config directory.
 
-Hosts are not saved between connections yet. The session vault, the folder
-tree and the `~/.ssh/config` and Xshell imports arrive in milestone 3.
+## Saved sessions
+
+The sidebar (**Ctrl+Shift+E**) is the session manager: a folder tree of saved
+hosts. Double-click one, or select it and press Enter, to connect. Each host
+records where to connect, as whom, and which authentication methods to try.
+
+Passwords are not typed into the host form. They are asked for by the
+connection, at the moment one is needed, with the option to save it - and a
+saved password goes to the OS keychain (Windows Credential Manager, macOS
+Keychain, Secret Service on Linux), never to the vault file. The vault itself
+is a SQLite database beside Harbour's config holding folders, hosts and no
+secrets whatsoever. Deleting a host takes its keychain entries with it, and
+*Forget it* in the host editor removes them without deleting the host.
+
+If your machine has no usable keychain, Harbour asks every time rather than
+falling back to writing the password somewhere.
+
+## Importing an existing estate
+
+Both importers show you everything they found and write nothing until you
+press Import.
+
+**OpenSSH** reads `~/.ssh/config`, following `Include` directives, and applies
+`ssh`'s own rules - first value wins, and wildcard `Host` blocks contribute
+defaults rather than becoming hosts of their own.
+
+**Xshell** walks an export directory, mirroring its folder tree. Sessions that
+are not SSH are listed with the reason they cannot come across rather than
+being dropped silently. Entries whose source never named a username are
+skipped unless you supply one to fall back on - importing under a guess would
+produce hosts that fail to connect for a reason you cannot see.
 
 ## Themes
 
@@ -82,6 +112,7 @@ milestone 4, along with per-host theme overrides.
 | --- | --- |
 | `Ctrl+Shift+T` | New terminal (default shell) |
 | `Ctrl+Shift+N` | New SSH connection |
+| `Ctrl+Shift+E` | Show or hide the session manager |
 | `Ctrl+Shift+W` | Close the active terminal |
 
 A user-editable keymap arrives in milestone 4.
@@ -91,7 +122,7 @@ A user-editable keymap arrives in milestone 4.
 ```
 src/              React frontend
   app/            layout shell
-  components/     terminal, ssh dialogs (and later sftp, sessions)
+  components/     terminal, ssh dialogs, session tree (and later sftp)
   ipc/            typed wrappers around invoke/listen - the only place
                   that knows command names
   stores/         zustand stores, one per domain
@@ -100,6 +131,7 @@ src-tauri/src/    Rust core
   commands/       thin IPC handlers
   session/        session manager, pty, output pump, shell detection
   ssh/            connect and auth, channel transport, known_hosts, agent
+  vault/          sqlite host store, os keychain, ssh_config and xshell imports
 docs/             architecture and the IPC contract
 ```
 
@@ -108,8 +140,8 @@ docs/             architecture and the IPC contract
 1. **Scaffold** - local shell tabs, CI on three platforms. *(done)*
 2. **SSH core** - `russh` with agent, key, password and keyboard-interactive
    auth; host key verification and prompts; pty channel. *(done)*
-3. Vault: SQLite host store, session tree, keyring, `~/.ssh/config` import,
-   **Xshell `.xsh` import** (parser done - see below).
+3. **Vault** - SQLite host store, session tree, OS keychain, `~/.ssh/config`
+   import, Xshell `.xsh` import. *(done)*
 4. Terminal polish: splits, search, keymaps, highlight rules, logging, and
    importing VS Code / iTerm / Windows Terminal colour schemes.
 5. SFTP on the shared connection: docked pane, local pane, navigation.
@@ -121,9 +153,10 @@ docs/             architecture and the IPC contract
 
 ## Migrating from Xshell
 
-Point Harbour at an Xshell export directory and it will walk the `.xsh` files,
-mirroring the session-manager folder tree, and import host, port, protocol,
-username, description, key name and encoding for each session.
+Point Harbour at an Xshell export directory - *Import Xshell* at the foot of
+the sidebar - and it will walk the `.xsh` files, mirroring the session-manager
+folder tree, and import host, port, protocol, username and description for
+each session.
 
 Stored passwords are **not** decoded. Xshell encrypts them against the Windows
 account and, if set, a master password, using a scheme that differs across
@@ -132,8 +165,7 @@ recovered plaintext into a new store. Imported hosts are flagged as having had a
 password so Harbour can prompt once, on first connect, and put it in the OS
 keychain.
 
-The parser and its tests are in `src-tauri/src/vault/xshell.rs` today; the
-import UI arrives with the vault in milestone 3.
+The parser and its tests are in `src-tauri/src/vault/xshell.rs`.
 
 ## Documentation
 

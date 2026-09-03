@@ -28,10 +28,14 @@ function heading(prompt: SecretPrompt): string {
  */
 export function SecretDialog({ prompt, onAnswer }: Props) {
   const [value, setValue] = useState("");
+  const [remember, setRemember] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setValue("");
+    // Never carried over: whether to save the *last* secret says nothing about
+    // whether to save this one.
+    setRemember(false);
     inputRef.current?.focus();
   }, [prompt.promptId]);
 
@@ -43,10 +47,10 @@ export function SecretDialog({ prompt, onAnswer }: Props) {
         className="w-96 rounded border border-[var(--hb-border)] bg-[var(--hb-panel)] p-4 shadow-xl"
         onSubmit={(event) => {
           event.preventDefault();
-          onAnswer({ secret: value });
+          onAnswer({ secret: value, remember });
         }}
         onKeyDown={(event) => {
-          if (event.key === "Escape") onAnswer({ secret: null });
+          if (event.key === "Escape") onAnswer({ secret: null, remember: false });
         }}
       >
         <h2 className="mb-2 text-sm font-medium">{heading(prompt)}</h2>
@@ -72,10 +76,21 @@ export function SecretDialog({ prompt, onAnswer }: Props) {
           className="mb-3 w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-xs"
         />
 
+        {prompt.canRemember && (
+          <label className="mb-3 flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+            />
+            Save it in the system keychain
+          </label>
+        )}
+
         <div className="flex justify-end gap-2">
           <button
             type="button"
-            onClick={() => onAnswer({ secret: null })}
+            onClick={() => onAnswer({ secret: null, remember: false })}
             className="rounded px-3 py-1 text-xs hover:bg-[var(--hb-hover)]"
           >
             Cancel

@@ -7,6 +7,25 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Added
 
+- **Milestone 3: the vault.** A SQLite store of saved hosts in a folder tree,
+  shown in a session-manager sidebar (Ctrl+Shift+E). Double-click a host, or
+  select it and press Enter, to connect.
+- Secrets in the OS keychain - Windows Credential Manager, macOS Keychain,
+  Secret Service on Linux - addressed by host id and slot. The database holds
+  no secret of any kind, only a flag saying whether one is expected. Deleting a
+  host or a folder removes the matching keychain entries, and the host editor
+  can forget a saved password without deleting the host.
+- A "save it in the system keychain" option on the password prompt, offered
+  only for a saved host on a machine with a working keychain. There is no
+  plaintext fallback: with no keychain, Harbour asks every time.
+- `~/.ssh/config` import that follows `Include` (including a wildcard in the
+  file name) and applies `ssh`'s own precedence: first value wins, and wildcard
+  `Host` blocks contribute defaults rather than becoming hosts.
+- Xshell `.xsh` import wired to the store, mirroring the export's folder tree.
+  Sessions that are not SSH are listed with the reason rather than dropped.
+- Both imports write nothing until reviewed, and skip entries whose source
+  named no username unless a fallback is given - importing under a guess would
+  produce hosts that fail to connect for an invisible reason.
 - **Milestone 2: SSH core.** Remote shells over `russh`, opened from a connect
   dialog (Ctrl+Shift+N) and driven through the same tabs, output pump and
   backpressure budget as local sessions.
@@ -58,6 +77,8 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Changed
 
+- A vault that will not open no longer stops the app: it falls back to an
+  in-memory store and logs, so local shells and ad-hoc SSH still work.
 - `russh` uses the `ring` crypto backend rather than the default `aws-lc-rs`,
   which needs NASM on Windows. Building Harbour still requires nothing but
   Rust, Node and pnpm.

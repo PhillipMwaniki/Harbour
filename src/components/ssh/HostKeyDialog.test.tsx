@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+
+import { typing } from "@tests/user";
 
 import type { HostKeyPrompt } from "@/ipc/types";
 import { HostKeyDialog } from "./HostKeyDialog";
@@ -46,7 +47,7 @@ describe("HostKeyDialog", () => {
     render(<HostKeyDialog prompt={prompt()} onAnswer={onAnswer} />);
 
     expect(screen.getByRole("checkbox")).toBeChecked();
-    await userEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await typing().click(screen.getByRole("button", { name: "Accept" }));
 
     expect(onAnswer).toHaveBeenCalledWith({ accept: true, remember: true });
   });
@@ -55,8 +56,8 @@ describe("HostKeyDialog", () => {
     const onAnswer = vi.fn();
     render(<HostKeyDialog prompt={prompt()} onAnswer={onAnswer} />);
 
-    await userEvent.click(screen.getByRole("checkbox"));
-    await userEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await typing().click(screen.getByRole("checkbox"));
+    await typing().click(screen.getByRole("button", { name: "Accept" }));
 
     expect(onAnswer).toHaveBeenCalledWith({ accept: true, remember: false });
   });
@@ -88,11 +89,11 @@ describe("HostKeyDialog", () => {
     const onAnswer = vi.fn();
     render(<HostKeyDialog prompt={changed} onAnswer={onAnswer} />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Accept anyway" }));
+    await typing().click(screen.getByRole("button", { name: "Accept anyway" }));
     expect(onAnswer).toHaveBeenCalledWith({ accept: true, remember: false });
 
     onAnswer.mockClear();
-    await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await typing().click(screen.getByRole("button", { name: "Reject" }));
     expect(onAnswer).toHaveBeenCalledWith({ accept: false, remember: false });
   });
 
@@ -100,7 +101,7 @@ describe("HostKeyDialog", () => {
     const onAnswer = vi.fn();
     render(<HostKeyDialog prompt={prompt()} onAnswer={onAnswer} />);
 
-    await userEvent.keyboard("{Escape}");
+    await typing().keyboard("{Escape}");
 
     expect(onAnswer).toHaveBeenCalledWith({ accept: false, remember: false });
   });

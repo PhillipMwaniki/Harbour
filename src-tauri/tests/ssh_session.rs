@@ -207,6 +207,7 @@ impl ScriptedAsker {
         });
         asker.secrets.lock().unwrap().push_back(SecretAnswer {
             secret: Some(password.to_string()),
+            remember: false,
         });
         Arc::new(asker)
     }
@@ -242,7 +243,10 @@ impl Asker for ScriptedAsker {
             .pop_front()
             // Running out of scripted answers means the user gave up, which is
             // exactly what a cancelled prompt looks like.
-            .unwrap_or(SecretAnswer { secret: None }))
+            .unwrap_or(SecretAnswer {
+                secret: None,
+                remember: false,
+            }))
     }
 }
 

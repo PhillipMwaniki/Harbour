@@ -11,7 +11,9 @@ export type TabStatus = "starting" | "live" | "closed";
  */
 export type SessionTarget =
   | { kind: "local"; shellId?: string }
-  | { kind: "ssh"; target: SshTarget; methods: AuthChoice[] };
+  | { kind: "ssh"; target: SshTarget; methods: AuthChoice[] }
+  /** A host from the vault. Credentials come from the keychain, not from here. */
+  | { kind: "host"; hostId: string; name: string };
 
 export const LOCAL_DEFAULT: SessionTarget = { kind: "local" };
 
@@ -71,6 +73,9 @@ export function neighbourOf(tabs: TerminalTab[], tabId: string): string | null {
  * password prompt for a while and an unlabelled tab is no help then.
  */
 export function provisionalTitle(target: SessionTarget, shells: ShellSpec[]): string {
+  if (target.kind === "host") {
+    return target.name;
+  }
   if (target.kind === "ssh") {
     const { user, host, port } = target.target;
     return port === 22 ? `${user}@${host}` : `${user}@${host}:${port}`;

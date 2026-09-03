@@ -96,6 +96,50 @@ shape depends on the prompt and is validated where it is awaited. Answering an
 id that is no longer waiting - it timed out, or its connection died - returns
 `PROMPT_NOT_FOUND`.
 
+### Vault
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `vault_tree` | - | `VaultTree` |
+| `vault_create_folder` | `parentId: string \| null`, `name: string` | `Folder` |
+| `vault_rename_folder` | `folderId: string`, `name: string` | `void` |
+| `vault_move_folder` | `folderId: string`, `parentId: string \| null` | `void` |
+| `vault_delete_folder` | `folderId: string` | `void` |
+| `vault_create_host` | `host: HostInput` | `Host` |
+| `vault_update_host` | `hostId: string`, `host: HostInput` | `Host` |
+| `vault_delete_host` | `hostId: string` | `void` |
+| `vault_move_host` | `hostId: string`, `folderId: string \| null` | `void` |
+| `vault_forget_secrets` | `hostId: string` | `void` |
+| `vault_keychain_available` | - | `boolean` |
+| `vault_preview_ssh_config` | `path?: string` | `ImportPreview` |
+| `vault_preview_xshell` | `path: string` | `ImportPreview` |
+| `vault_apply_import` | `candidates: ImportCandidate[]`, `username: string \| null` | `ImportResult` |
+| `host_connect` | `hostId: string`, `cols: number`, `rows: number` | `SessionInfo` |
+
+`vault_tree` returns the whole tree in one call: a few hundred hosts at most,
+so paging it would cost more than it saves.
+
+**No command takes or returns a secret.** A `Host` says which methods to try
+and whether a password is expected (`hasSavedPassword`); the password itself is
+in the OS keychain, keyed by host id, and only ever moves between the keychain
+and the connection that needs it.
+
+`vault_delete_folder` deletes everything underneath, hosts and saved secrets
+included. The UI confirms first.
+
+`vault_forget_secrets` removes the host's saved password *and* key passphrase.
+Removing something that is not there is success.
+
+`vault_preview_*` write nothing: they read the source and return what they
+found for review. `vault_apply_import` is what writes, and it skips any
+candidate carrying a `skipReason` or lacking a username with no `username`
+fallback to fall back on, rather than importing a guess.
+
+`host_connect` is `ssh_connect` with the vault behind it. The prompts are the
+same, except that a saved password is taken from the keychain without asking,
+and a `connection:auth_prompt` for a saved host carries `canRemember: true` so
+the answer can be saved.
+
 ## Events
 
 | Event | Payload |
@@ -119,7 +163,7 @@ connection attempt until they are answered or the five-minute timeout expires.
 | Event | Payload |
 | --- | --- |
 | `connection:hostkey_prompt` | `{ promptId, host, port, status, algorithm, fingerprint, stored }` |
-| `connection:auth_prompt` | `{ promptId, host, user, kind, label, instruction, echo }` |
+| `connection:auth_prompt` | `{ promptId, host, user, kind, label, instruction, echo, canRemember }` |
 
 `status` is `"unknown"` (nothing on file: trust on first use) or `"changed"` (a
 key of the same type is on file and does not match). `stored` lists what is
@@ -130,9 +174,15 @@ with `SSH_HOSTKEY_REJECTED`.
 
 `kind` is `"password"`, `"passphrase"` or `"challenge"` (a question the server
 worded, under keyboard-interactive). `echo` is true only when the server says
-the answer is not secret. Answer with `{ secret: string | null }`, where `null`
-means the user dismissed the prompt: the attempt stops without spending another
-authentication try.
+the answer is not secret. `canRemember` says whether there is anywhere to save
+the answer - a saved host, on a machine with a working keychain - and is false
+for an ad-hoc connection.
+
+Answer with `{ secret: string | null, remember: boolean }`. `null` means the
+user dismissed the prompt: the attempt stops without spending another
+authentication try. `remember` is honoured only when `canRemember` was true,
+and never for a `challenge`, since a one-time code saved and replayed is worse
+than useless.
 
 ## Error codes
 
@@ -152,6 +202,10 @@ authentication try.
 | `SSH_AGENT_UNAVAILABLE` | No agent answered, or it holds no identities |
 | `SSH_CHANNEL_FAILED` | The remote refused a channel, pty or shell request |
 | `SSH_PROTOCOL_ERROR` | Anything russh reports below that level |
+| `HOST_NOT_FOUND` | No saved host with that id |
+| `FOLDER_NOT_FOUND` | No folder with that id |
+| `VAULT_ERROR` | The store refused: bad input, or SQLite said no |
+| `KEYRING_UNAVAILABLE` | The OS keychain could not be reached |
 | `PROMPT_NOT_FOUND` | `connection_respond` for a prompt no longer waiting |
 | `PROMPT_TIMED_OUT` | Nobody answered a prompt within five minutes |
 | `INTERNAL` | Unclassified; always a bug worth a log line |
@@ -162,6 +216,6 @@ useless when the real problem is `PasswordAuthentication no`.
 
 ## Not yet implemented
 
-The spec defines further domains - `host_*`, `sftp_*`, `transfer_*`,
-`forward_*` and `fleet_*`. They are listed here so the naming stays consistent
-when they land, but no handler exists yet.
+The spec defines further domains - `sftp_*`, `transfer_*`, `forward_*` and
+`fleet_*`. They are listed here so the naming stays consistent when they land,
+but no handler exists yet.

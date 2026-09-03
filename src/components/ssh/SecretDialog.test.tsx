@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+
+import { typing } from "@tests/user";
 
 import type { SecretPrompt } from "@/ipc/types";
 import { SecretDialog } from "./SecretDialog";
@@ -14,6 +15,7 @@ function prompt(overrides: Partial<SecretPrompt> = {}): SecretPrompt {
     label: "Password for deploy@example.com",
     instruction: "",
     echo: false,
+    canRemember: false,
     ...overrides,
   };
 }
@@ -23,19 +25,19 @@ describe("SecretDialog", () => {
     const onAnswer = vi.fn();
     render(<SecretDialog prompt={prompt()} onAnswer={onAnswer} />);
 
-    await userEvent.type(screen.getByLabelText("Password for deploy@example.com"), "hunter2");
-    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await typing().type(screen.getByLabelText("Password for deploy@example.com"), "hunter2");
+    await typing().click(screen.getByRole("button", { name: "Send" }));
 
-    expect(onAnswer).toHaveBeenCalledWith({ secret: "hunter2" });
+    expect(onAnswer).toHaveBeenCalledWith({ secret: "hunter2", remember: false });
   });
 
   it("submits on Enter", async () => {
     const onAnswer = vi.fn();
     render(<SecretDialog prompt={prompt()} onAnswer={onAnswer} />);
 
-    await userEvent.type(screen.getByLabelText(/Password for/), "hunter2{Enter}");
+    await typing().type(screen.getByLabelText(/Password for/), "hunter2{Enter}");
 
-    expect(onAnswer).toHaveBeenCalledWith({ secret: "hunter2" });
+    expect(onAnswer).toHaveBeenCalledWith({ secret: "hunter2", remember: false });
   });
 
   /// Cancelling has to be distinguishable from an empty password: the backend
@@ -44,18 +46,18 @@ describe("SecretDialog", () => {
     const onAnswer = vi.fn();
     render(<SecretDialog prompt={prompt()} onAnswer={onAnswer} />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await typing().click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(onAnswer).toHaveBeenCalledWith({ secret: null });
+    expect(onAnswer).toHaveBeenCalledWith({ secret: null, remember: false });
   });
 
   it("treats Escape as a cancellation", async () => {
     const onAnswer = vi.fn();
     render(<SecretDialog prompt={prompt()} onAnswer={onAnswer} />);
 
-    await userEvent.keyboard("{Escape}");
+    await typing().keyboard("{Escape}");
 
-    expect(onAnswer).toHaveBeenCalledWith({ secret: null });
+    expect(onAnswer).toHaveBeenCalledWith({ secret: null, remember: false });
   });
 
   it("masks the input for a secret", () => {
@@ -94,7 +96,7 @@ describe("SecretDialog", () => {
 
   it("empties the field when it is reused for the next prompt", async () => {
     const { rerender } = render(<SecretDialog prompt={prompt()} onAnswer={vi.fn()} />);
-    await userEvent.type(screen.getByLabelText(/Password for/), "hunter2");
+    await typing().type(screen.getByLabelText(/Password for/), "hunter2");
 
     rerender(
       <SecretDialog

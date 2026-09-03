@@ -134,6 +134,11 @@ pub struct SecretQuestion {
     /// Whether the typed answer may be shown. False for every real secret;
     /// keyboard-interactive can ask non-secret questions too.
     pub echo: bool,
+    /// Whether there is anywhere to save this answer. False for an ad-hoc
+    /// connection, which has no host record to attach a keychain entry to, and
+    /// false when the machine has no usable keychain - offering to remember
+    /// something that will be forgotten is worse than not offering.
+    pub can_remember: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -142,6 +147,10 @@ pub struct SecretAnswer {
     /// `None` means the user dismissed the prompt: stop, do not try the next
     /// method, and do not treat it as an authentication failure.
     pub secret: Option<String>,
+    /// Save it in the OS keychain. Only ever set when the question said it
+    /// could be.
+    #[serde(default)]
+    pub remember: bool,
 }
 
 /// How the SSH code reaches the user.

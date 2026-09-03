@@ -230,23 +230,15 @@ fn parse_line(line: &str, number: usize) -> Option<Entry> {
 /// be hashed, negated, or contain `*` and `?` wildcards. A negated pattern that
 /// matches vetoes the whole entry.
 fn matches_host(patterns: &str, target: &str) -> bool {
-    let mut matched = false;
-    for pattern in patterns.split(',') {
-        if let Some(rest) = pattern.strip_prefix('!') {
-            if glob_matches(rest, target) {
-                return false;
-            }
-            continue;
-        }
-        if pattern.starts_with("|1|") {
-            if hashed_matches(pattern, target) {
-                matched = true;
-            }
-        } else if glob_matches(pattern, target) {
-            matched = true;
-        }
+    // Hashed entries cannot be wildcards - a hash matches one host exactly - so
+    // they are checked here and everything else is ordinary pattern matching.
+    let (hashed, plain): (Vec<&str>, Vec<&str>) =
+        patterns.split(',').partition(|p| p.starts_with("|1|"));
+
+    if hashed.iter().any(|pattern| hashed_matches(pattern, target)) {
+        return true;
     }
-    matched
+    !plain.is_empty() && crate::glob::matches_list(&plain.join(","), target)
 }
 
 /// `|1|<base64 salt>|<base64 HMAC-SHA1>`; the MAC is keyed with the salt and
@@ -268,34 +260,6 @@ fn hashed_matches(pattern: &str, target: &str) -> bool {
     mac.chain_update(target.as_bytes())
         .verify_slice(&hash)
         .is_ok()
-}
-
-/// `*` matches any run of characters, `?` exactly one. Written iteratively
-/// with backtracking so a pathological pattern cannot blow the stack.
-fn glob_matches(pattern: &str, target: &str) -> bool {
-    let pattern: Vec<char> = pattern.chars().collect();
-    let target: Vec<char> = target.chars().collect();
-    let (mut p, mut t) = (0usize, 0usize);
-    // Where to resume if the current `*` turns out to have consumed too little.
-    let (mut star, mut resume) = (None, 0usize);
-
-    while t < target.len() {
-        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == target[t]) {
-            p += 1;
-            t += 1;
-        } else if p < pattern.len() && pattern[p] == '*' {
-            star = Some(p);
-            resume = t;
-            p += 1;
-        } else if let Some(index) = star {
-            p = index + 1;
-            resume += 1;
-            t = resume;
-        } else {
-            return false;
-        }
-    }
-    pattern[p..].iter().all(|&c| c == '*')
 }
 
 #[cfg(test)]
@@ -480,18 +444,5 @@ mod tests {
             reread.verify("example.com", 2222, &key(KEY_A)),
             Verdict::Trusted
         );
-    }
-
-    #[test]
-    fn globs_match_the_way_openssh_does() {
-        assert!(glob_matches("*.example.com", "web.example.com"));
-        assert!(!glob_matches("*.example.com", "example.com"));
-        assert!(glob_matches("web?.example.com", "web1.example.com"));
-        assert!(!glob_matches("web?.example.com", "web12.example.com"));
-        assert!(glob_matches("*", "anything"));
-        assert!(glob_matches("10.0.*.*", "10.0.1.7"));
-        assert!(!glob_matches("10.0.*", "10.1.0.1"));
-        // Backtracking: the first `*` has to give ground for the tail to match.
-        assert!(glob_matches("*b*c", "abxbxc"));
     }
 }

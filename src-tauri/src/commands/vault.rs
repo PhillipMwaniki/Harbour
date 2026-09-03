@@ -1,0 +1,375 @@
+//! Vault IPC surface. See `docs/ipc.md` for the contract.
+//!
+//! Every store call is wrapped in `spawn_blocking`: SQLite is synchronous, and
+//! so is the OS keychain, which on macOS can put an authorisation dialog in
+//! front of the user. Neither belongs on the runtime that is also pumping
+//! terminal output.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use tauri::{AppHandle, Emitter, State};
+
+use crate::error::{AppError, AppResult};
+use crate::session::manager::{self, NewSession};
+use crate::session::{SessionClosed, SessionInfo, SessionKind};
+use crate::ssh::client::{self, ConnectRequest};
+use crate::ssh::{Asker, HostKeyAnswer, HostKeyQuestion, SecretAnswer, SecretKind, SecretQuestion};
+use crate::vault::import::{self, Applied, Candidate, Preview};
+use crate::vault::model::{Folder, FolderId, Host, HostId, HostInput, VaultTree};
+use crate::vault::secrets::{self, SecretSlot};
+use crate::vault::{ssh_config, xshell};
+use crate::AppState;
+
+/// Runs a blocking vault operation off the async runtime.
+async fn blocking<T, F>(work: F) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> AppResult<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|err| AppError::internal(format!("vault task failed: {err}")))?
+}
+
+// ---------------------------------------------------------------------------
+// Reading and editing
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn vault_tree(state: State<'_, AppState>) -> AppResult<VaultTree> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || vault.tree()).await
+}
+
+#[tauri::command]
+pub async fn vault_create_folder(
+    state: State<'_, AppState>,
+    parent_id: Option<String>,
+    name: String,
+) -> AppResult<Folder> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || vault.create_folder(parent_id.as_deref(), &name)).await
+}
+
+#[tauri::command]
+pub async fn vault_rename_folder(
+    state: State<'_, AppState>,
+    folder_id: FolderId,
+    name: String,
+) -> AppResult<()> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || vault.rename_folder(&folder_id, &name)).await
+}
+
+#[tauri::command]
+pub async fn vault_move_folder(
+    state: State<'_, AppState>,
+    folder_id: FolderId,
+    parent_id: Option<String>,
+) -> AppResult<()> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || vault.move_folder(&folder_id, parent_id.as_deref())).await
+}
+
+/// Deletes a folder and everything inside it. The UI confirms first; by the
+/// time this is called the user has said yes.
+#[tauri::command]
+pub async fn vault_delete_folder(state: State<'_, AppState>, folder_id: FolderId) -> AppResult<()> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || {
+        // Take the saved secrets with the hosts, so deleting a folder does not
+        // leave passwords behind in the keychain with nothing pointing at them.
+        let doomed: Vec<HostId> = vault
+            .tree()?
+            .hosts
+            .into_iter()
+            .filter(|host| host.folder_id.as_deref() == Some(folder_id.as_str()))
+            .map(|host| host.id)
+            .collect();
+        vault.delete_folder(&folder_id)?;
+        for host in doomed {
+            forget_all_secrets(&host);
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn vault_create_host(state: State<'_, AppState>, host: HostInput) -> AppResult<Host> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || vault.create_host(host)).await
+}
+
+#[tauri::command]
+pub async fn vault_update_host(
+    state: State<'_, AppState>,
+    host_id: HostId,
+    host: HostInput,
+) -> AppResult<Host> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || vault.update_host(&host_id, host)).await
+}
+
+#[tauri::command]
+pub async fn vault_delete_host(state: State<'_, AppState>, host_id: HostId) -> AppResult<()> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || {
+        vault.delete_host(&host_id)?;
+        forget_all_secrets(&host_id);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn vault_move_host(
+    state: State<'_, AppState>,
+    host_id: HostId,
+    folder_id: Option<String>,
+) -> AppResult<()> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || vault.move_host(&host_id, folder_id.as_deref())).await
+}
+
+/// Removes a host's saved password and passphrase from the keychain.
+#[tauri::command]
+pub async fn vault_forget_secrets(state: State<'_, AppState>, host_id: HostId) -> AppResult<()> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || {
+        secrets::delete(&host_id, SecretSlot::Password)?;
+        secrets::delete(&host_id, SecretSlot::KeyPassphrase)?;
+        vault.set_saved_password(&host_id, false)
+    })
+    .await
+}
+
+/// Whether this machine can save secrets at all, so the UI can say so instead
+/// of offering a checkbox that will not stick.
+#[tauri::command]
+pub async fn vault_keychain_available() -> AppResult<bool> {
+    blocking(|| Ok(secrets::available())).await
+}
+
+/// Best effort: a host is being deleted, so its secrets should go too, but a
+/// keychain that refuses must not block the deletion the user asked for.
+fn forget_all_secrets(host: &HostId) {
+    for slot in [SecretSlot::Password, SecretSlot::KeyPassphrase] {
+        if let Err(err) = secrets::delete(host, slot) {
+            tracing::warn!(error = %err, "could not remove a saved secret");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Imports
+// ---------------------------------------------------------------------------
+
+/// Reads `~/.ssh/config` - or `path`, if given - and returns what it found.
+/// Nothing is written; the UI reviews the list first.
+#[tauri::command]
+pub async fn vault_preview_ssh_config(path: Option<String>) -> AppResult<Preview> {
+    blocking(move || {
+        let path = match path {
+            Some(path) => PathBuf::from(path),
+            None => ssh_config::default_path()
+                .ok_or_else(|| AppError::Vault("this machine has no home directory".into()))?,
+        };
+        let source = path.display().to_string();
+        Ok(import::from_ssh_config(ssh_config::read(&path), source))
+    })
+    .await
+}
+
+/// Walks an Xshell export directory. Also writes nothing.
+#[tauri::command]
+pub async fn vault_preview_xshell(path: String) -> AppResult<Preview> {
+    blocking(move || {
+        let root = PathBuf::from(&path);
+        let report = xshell::import_tree(&root).map_err(|err| {
+            AppError::Vault(format!("could not read the export at {path}: {err}"))
+        })?;
+        Ok(import::from_xshell(report, path))
+    })
+    .await
+}
+
+/// Writes the reviewed candidates into the vault.
+#[tauri::command]
+pub async fn vault_apply_import(
+    state: State<'_, AppState>,
+    candidates: Vec<Candidate>,
+    username: Option<String>,
+) -> AppResult<Applied> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || import::apply(&vault, &candidates, username.as_deref())).await
+}
+
+// ---------------------------------------------------------------------------
+// Connecting
+// ---------------------------------------------------------------------------
+
+/// Opens a session to a saved host.
+///
+/// The only difference from `ssh_connect` is where the answers come from: a
+/// saved password is taken from the keychain instead of being asked for, and a
+/// password the user chooses to remember is written back.
+#[tauri::command]
+pub async fn host_connect(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    host_id: HostId,
+    cols: u16,
+    rows: u16,
+) -> AppResult<SessionInfo> {
+    let vault = Arc::clone(&state.vault);
+    let lookup = host_id.clone();
+    let host = blocking(move || vault.host(&lookup)).await?;
+
+    let methods = host.auth.methods();
+    if methods.is_empty() {
+        return Err(AppError::Vault(format!(
+            "{} has no authentication method enabled",
+            host.name
+        )));
+    }
+
+    let id = manager::new_id();
+    let exit_id = id.clone();
+    let exit_manager = state.sessions.clone();
+    let exit_app = app.clone();
+
+    let asker = Arc::new(SavedHostAsker {
+        inner: super::ssh::EventAsker::new(app.clone(), Arc::clone(&state.prompts)),
+        host_id: host.id.clone(),
+        vault: Arc::clone(&state.vault),
+        keychain: secrets::available(),
+    });
+
+    let title = host.name.clone();
+    let connected = client::connect(
+        ConnectRequest {
+            target: host.target(),
+            methods,
+            cols,
+            rows,
+        },
+        asker,
+        Arc::clone(&state.known_hosts),
+        move |reason, code| {
+            let closed = SessionClosed::new(exit_id, reason, code);
+            exit_manager.remove(&closed.session_id);
+            if let Err(err) = exit_app.emit("session:closed", &closed) {
+                tracing::warn!(error = %err, "failed to emit session:closed");
+            }
+        },
+    )
+    .await?;
+
+    tracing::info!(
+        session = %id,
+        host = %host.id,
+        method = connected.method,
+        "opened a session to a saved host"
+    );
+
+    let info = state.sessions.adopt(NewSession {
+        id,
+        kind: SessionKind::Ssh,
+        title,
+        transport: Box::new(connected.transport),
+        output: connected.output,
+    });
+
+    let _ = app.emit("session:opened", &info);
+    Ok(info)
+}
+
+/// Answers from the keychain where it can, and from the user where it cannot.
+struct SavedHostAsker {
+    inner: super::ssh::EventAsker,
+    host_id: HostId,
+    vault: Arc<crate::vault::store::Vault>,
+    /// Whether this machine has a keychain at all, decided once at connect
+    /// time rather than per prompt.
+    keychain: bool,
+}
+
+impl SavedHostAsker {
+    fn slot(kind: SecretKind) -> Option<SecretSlot> {
+        match kind {
+            SecretKind::Password => Some(SecretSlot::Password),
+            SecretKind::Passphrase => Some(SecretSlot::KeyPassphrase),
+            // Keyboard-interactive prompts are whatever the server decided to
+            // ask; a one-time code saved and replayed would be worse than
+            // useless, so nothing here is stored.
+            SecretKind::Challenge => None,
+        }
+    }
+
+    async fn saved(&self, slot: SecretSlot) -> Option<String> {
+        let host = self.host_id.clone();
+        let read = tauri::async_runtime::spawn_blocking(move || secrets::get(&host, slot)).await;
+        match read {
+            Ok(Ok(secret)) => secret,
+            Ok(Err(err)) => {
+                // A locked or missing keychain is a reason to ask the user, not
+                // a reason to fail the connection.
+                tracing::warn!(error = %err, "could not read a saved secret");
+                None
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "the keychain read did not complete");
+                None
+            }
+        }
+    }
+
+    async fn remember(&self, slot: SecretSlot, secret: String) {
+        let host = self.host_id.clone();
+        let vault = Arc::clone(&self.vault);
+        let stored = tauri::async_runtime::spawn_blocking(move || {
+            secrets::set(&host, slot, &secret)?;
+            if slot == SecretSlot::Password {
+                vault.set_saved_password(&host, true)?;
+            }
+            Ok::<_, AppError>(())
+        })
+        .await;
+
+        match stored {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => tracing::warn!(error = %err, "could not save a secret"),
+            Err(err) => tracing::warn!(error = %err, "the keychain write did not complete"),
+        }
+    }
+}
+
+impl Asker for SavedHostAsker {
+    async fn host_key(&self, question: HostKeyQuestion) -> AppResult<HostKeyAnswer> {
+        self.inner.host_key(question).await
+    }
+
+    async fn secret(&self, mut question: SecretQuestion) -> AppResult<SecretAnswer> {
+        let slot = Self::slot(question.kind);
+
+        if let Some(slot) = slot {
+            if let Some(secret) = self.saved(slot).await {
+                return Ok(SecretAnswer {
+                    secret: Some(secret),
+                    remember: false,
+                });
+            }
+        }
+
+        // Only offer to remember what there is somewhere to remember.
+        question.can_remember = self.keychain && slot.is_some();
+        let answer = self.inner.secret(question).await?;
+
+        if let (Some(slot), Some(secret), true) = (slot, answer.secret.as_ref(), answer.remember) {
+            self.remember(slot, secret.clone()).await;
+        }
+        Ok(answer)
+    }
+}

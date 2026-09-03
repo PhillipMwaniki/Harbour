@@ -10,7 +10,10 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: { "@": path.resolve(fileURLToPath(new URL(".", import.meta.url)), "./src") },
+    alias: {
+      "@": path.resolve(fileURLToPath(new URL(".", import.meta.url)), "./src"),
+      "@tests": path.resolve(fileURLToPath(new URL(".", import.meta.url)), "./tests"),
+    },
   },
   // Vite options tailored for Tauri: never obscure Rust errors.
   clearScreen: false,
@@ -32,6 +35,10 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    // jsdom plus React plus user-event is slow, and CI runners are slower
+    // still. The default 5s produces red builds that pass on a rerun, which
+    // teaches people to ignore red builds.
+    testTimeout: 20_000,
     setupFiles: ["./tests/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.{ts,tsx}"],
   },

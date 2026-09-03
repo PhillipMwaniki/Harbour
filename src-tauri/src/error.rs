@@ -55,6 +55,18 @@ pub enum AppError {
     #[error("the remote refused a channel: {0}")]
     SshChannel(String),
 
+    #[error("no host with id {0}")]
+    HostNotFound(String),
+
+    #[error("no folder with id {0}")]
+    FolderNotFound(String),
+
+    #[error("the vault could not complete that: {0}")]
+    Vault(String),
+
+    #[error("the system keychain is not usable: {0}")]
+    Keyring(String),
+
     #[error("prompt {0} is no longer waiting for an answer")]
     PromptNotFound(String),
 
@@ -84,6 +96,10 @@ impl AppError {
             AppError::SshKeyLoad { .. } => "SSH_KEY_LOAD_FAILED",
             AppError::SshAgent(_) => "SSH_AGENT_UNAVAILABLE",
             AppError::SshChannel(_) => "SSH_CHANNEL_FAILED",
+            AppError::HostNotFound(_) => "HOST_NOT_FOUND",
+            AppError::FolderNotFound(_) => "FOLDER_NOT_FOUND",
+            AppError::Vault(_) => "VAULT_ERROR",
+            AppError::Keyring(_) => "KEYRING_UNAVAILABLE",
             AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
             AppError::PromptTimedOut => "PROMPT_TIMED_OUT",
             AppError::Internal(_) => "INTERNAL",

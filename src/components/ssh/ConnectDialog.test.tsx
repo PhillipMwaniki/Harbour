@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+
+import { typing } from "@tests/user";
 
 import { buildMethods, ConnectDialog } from "./ConnectDialog";
 
@@ -43,9 +44,9 @@ describe("ConnectDialog", () => {
     const onConnect = vi.fn();
     render(<ConnectDialog open onConnect={onConnect} onCancel={vi.fn()} />);
 
-    await userEvent.type(screen.getByLabelText("Host"), "example.com");
-    await userEvent.type(screen.getByLabelText("Username"), "deploy");
-    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await typing().type(screen.getByLabelText("Host"), "example.com");
+    await typing().type(screen.getByLabelText("Username"), "deploy");
+    await typing().click(screen.getByRole("button", { name: "Connect" }));
 
     expect(onConnect).toHaveBeenCalledWith({
       target: { host: "example.com", port: 22, user: "deploy" },
@@ -57,11 +58,11 @@ describe("ConnectDialog", () => {
     const onConnect = vi.fn();
     render(<ConnectDialog open onConnect={onConnect} onCancel={vi.fn()} />);
 
-    await userEvent.type(screen.getByLabelText("Host"), "example.com");
-    await userEvent.type(screen.getByLabelText("Username"), "deploy");
-    await userEvent.clear(screen.getByLabelText("Port"));
-    await userEvent.type(screen.getByLabelText("Port"), "2222");
-    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await typing().type(screen.getByLabelText("Host"), "example.com");
+    await typing().type(screen.getByLabelText("Username"), "deploy");
+    await typing().clear(screen.getByLabelText("Port"));
+    await typing().type(screen.getByLabelText("Port"), "2222");
+    await typing().click(screen.getByRole("button", { name: "Connect" }));
 
     expect(onConnect.mock.calls[0][0].target.port).toBe(2222);
   });
@@ -71,20 +72,20 @@ describe("ConnectDialog", () => {
 
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
 
-    await userEvent.type(screen.getByLabelText("Host"), "example.com");
+    await typing().type(screen.getByLabelText("Host"), "example.com");
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
 
-    await userEvent.type(screen.getByLabelText("Username"), "deploy");
+    await typing().type(screen.getByLabelText("Username"), "deploy");
     expect(screen.getByRole("button", { name: "Connect" })).toBeEnabled();
   });
 
   it("refuses a port outside the valid range", async () => {
     render(<ConnectDialog open onConnect={vi.fn()} onCancel={vi.fn()} />);
 
-    await userEvent.type(screen.getByLabelText("Host"), "example.com");
-    await userEvent.type(screen.getByLabelText("Username"), "deploy");
-    await userEvent.clear(screen.getByLabelText("Port"));
-    await userEvent.type(screen.getByLabelText("Port"), "70000");
+    await typing().type(screen.getByLabelText("Host"), "example.com");
+    await typing().type(screen.getByLabelText("Username"), "deploy");
+    await typing().clear(screen.getByLabelText("Port"));
+    await typing().type(screen.getByLabelText("Port"), "70000");
 
     expect(screen.getByLabelText("Port")).toBeInvalid();
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
@@ -94,9 +95,9 @@ describe("ConnectDialog", () => {
     const onConnect = vi.fn();
     render(<ConnectDialog open onConnect={onConnect} onCancel={vi.fn()} />);
 
-    await userEvent.type(screen.getByLabelText("Host"), "  example.com  ");
-    await userEvent.type(screen.getByLabelText("Username"), " deploy ");
-    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await typing().type(screen.getByLabelText("Host"), "  example.com  ");
+    await typing().type(screen.getByLabelText("Username"), " deploy ");
+    await typing().click(screen.getByRole("button", { name: "Connect" }));
 
     expect(onConnect.mock.calls[0][0].target).toEqual({
       host: "example.com",
@@ -109,7 +110,7 @@ describe("ConnectDialog", () => {
     const onCancel = vi.fn();
     render(<ConnectDialog open onConnect={vi.fn()} onCancel={onCancel} />);
 
-    await userEvent.keyboard("{Escape}");
+    await typing().keyboard("{Escape}");
 
     expect(onCancel).toHaveBeenCalled();
   });

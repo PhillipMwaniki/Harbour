@@ -15,9 +15,10 @@ binding on every change, and most of them predate the code that will need them.
 
 ## Secrets
 
-- Secrets never go in SQLite or the settings store. The host record holds a
-  `credential_ref`; the secret itself lives in the OS keychain (Windows
-  Credential Manager, macOS Keychain, Secret Service).
+- Secrets never go in SQLite or the settings store. The host record holds only
+  a flag saying whether an entry is expected; the secret itself lives in the OS
+  keychain (Windows Credential Manager, macOS Keychain, Secret Service), keyed
+  by the host's id and the slot (`password` or `passphrase`).
 - If the keyring is unavailable, prompt the user. Never fall back to plaintext
   storage.
 - Optional master password wraps a random vault key held in the keyring; with
@@ -64,17 +65,24 @@ refusing hosts that present an `ssh-rsa` host key or expect an RSA user key -
 still a large share of the machines this tool exists to reach. In Harbour an
 RSA private key signs one authentication challenge per connection, to a server
 the user chose; Ed25519 and ECDSA are unaffected and are what key generation
-will default to in milestone 3. The ignore carries this reasoning inline, and
-any future entry must do the same.
+will default to when key generation lands. The ignore carries this reasoning
+inline, and any future entry must do the same.
 
 ## Current state
 
-Milestone 2 implements the host key rules and the credential handling that goes
-with connecting; the vault rules still describe milestone 3.
+Milestone 3 implements the host key rules, the credential handling that goes
+with connecting, and the vault. The master-password and export rules above
+still describe milestone 8.
 
 Implemented:
 
-- Host keys, in full. `~/.ssh/known_hosts` and `known_hosts2` are read -
+- The vault. SQLite holds folders and hosts and nothing else; every secret is
+  in the OS keychain, addressed by host id. Deleting a host or a folder takes
+  the matching keychain entries with it, so nothing is orphaned. There is no
+  plaintext fallback: with no keychain the user is asked every time, which is
+  an inconvenience, where writing a password to a file they did not ask for
+  would be a betrayal.
+- Host key trust, in full. `~/.ssh/known_hosts` and `known_hosts2` are read -
   including hashed entries, wildcards, negations and `@revoked` - and Harbour
   appends only to its own file under the app config directory. An unknown key
   prompts with the SHA-256 fingerprint and offers to remember it; a changed key
@@ -87,12 +95,15 @@ Implemented:
 - `@cert-authority` lines are parsed and ignored rather than mistaken for host
   keys, and a server offering a host *certificate* is refused outright rather
   than trusted unverified.
+- Imports that write nothing until reviewed. `~/.ssh/config` and Xshell exports
+  are read into a list the user confirms; Xshell passwords are still not
+  decoded, only noted as having existed.
 
 Not yet:
 
-- The vault, the keyring, the master password and encrypted export - all
-  milestone 3. Nothing is persisted between connections today except a host key
-  the user chose to remember.
+- The master password and encrypted export, both milestone 8. Today the vault
+  file is plain SQLite - it holds no secrets, but it does describe the estate,
+  so it is worth the same care as `~/.ssh/config`.
 - Agent forwarding is not implemented at all, which is the safe default.
 - Session logging does not exist, so the no-echo masking rule has nothing to
   apply to yet.
