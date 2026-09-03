@@ -7,6 +7,7 @@
 //! and bytes travelling in both directions over a live channel.
 
 use std::collections::{HashMap, VecDeque};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -23,11 +24,15 @@ use harbour_lib::ssh::{
     Asker, AuthChoice, HostKeyAnswer, HostKeyQuestion, HostKeyStatus, SecretAnswer, SecretKind,
     SecretQuestion, SshTarget,
 };
+use harbour_lib::transfer::engine::Engine;
+use harbour_lib::transfer::{
+    ConflictPolicy, Direction, Request, Resolution, Transfer, TransferState,
+};
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet};
 use russh_sftp::protocol::{
-    Attrs, File, FileAttributes, Handle as SftpHandle, Name, Status, StatusCode,
+    Attrs, Data, File, FileAttributes, Handle as SftpHandle, Name, OpenFlags, Status, StatusCode,
 };
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -674,13 +679,29 @@ async fn closing_a_session_reports_it_as_killed() {
 // A minimal SFTP server over a temp directory
 // ---------------------------------------------------------------------------
 
-/// Serves one directory tree as `/`: exactly the protocol a listing needs -
-/// realpath, opendir, readdir, close, stat and lstat - and nothing that
-/// writes.
+/// What an open handle refers to.
+enum Opened {
+    Dir(VecDeque<File>),
+    File(std::fs::File),
+}
+
+/// Serves one directory tree as `/`: listing, reading and writing files at
+/// offsets, and the handful of mutations the panes and the transfer engine
+/// use. Enough of the protocol to be an honest stand-in for OpenSSH's sftp
+/// server in tests, and no more.
 struct SftpHandler {
     root: PathBuf,
-    handles: HashMap<String, VecDeque<File>>,
+    handles: HashMap<String, Opened>,
     next_handle: u32,
+}
+
+fn ok(id: u32) -> Status {
+    Status {
+        id,
+        status_code: StatusCode::Ok,
+        error_message: "Ok".into(),
+        language_tag: "en".into(),
+    }
 }
 
 impl SftpHandler {
@@ -734,15 +755,14 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
         self.next_handle += 1;
         let handle = self.next_handle.to_string();
-        self.handles.insert(handle.clone(), files);
+        self.handles.insert(handle.clone(), Opened::Dir(files));
         Ok(SftpHandle { id, handle })
     }
 
     async fn readdir(&mut self, id: u32, handle: String) -> Result<Name, StatusCode> {
-        let files = self
-            .handles
-            .get_mut(&handle)
-            .ok_or(StatusCode::NoSuchFile)?;
+        let Some(Opened::Dir(files)) = self.handles.get_mut(&handle) else {
+            return Err(StatusCode::NoSuchFile);
+        };
         if files.is_empty() {
             return Err(StatusCode::Eof);
         }
@@ -754,12 +774,129 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, StatusCode> {
         self.handles.remove(&handle);
-        Ok(Status {
+        Ok(ok(id))
+    }
+
+    async fn open(
+        &mut self,
+        id: u32,
+        filename: String,
+        pflags: OpenFlags,
+        _attrs: FileAttributes,
+    ) -> Result<SftpHandle, StatusCode> {
+        let options: std::fs::OpenOptions = pflags.into();
+        let file = options
+            .open(self.resolve(&filename))
+            .map_err(|_| StatusCode::NoSuchFile)?;
+        self.next_handle += 1;
+        let handle = self.next_handle.to_string();
+        self.handles.insert(handle.clone(), Opened::File(file));
+        Ok(SftpHandle { id, handle })
+    }
+
+    async fn read(
+        &mut self,
+        id: u32,
+        handle: String,
+        offset: u64,
+        len: u32,
+    ) -> Result<Data, StatusCode> {
+        let Some(Opened::File(file)) = self.handles.get_mut(&handle) else {
+            return Err(StatusCode::NoSuchFile);
+        };
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|_| StatusCode::Failure)?;
+        let mut data = vec![0u8; len as usize];
+        let mut filled = 0;
+        while filled < data.len() {
+            let n = file
+                .read(&mut data[filled..])
+                .map_err(|_| StatusCode::Failure)?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
+        }
+        if filled == 0 && len > 0 {
+            return Err(StatusCode::Eof);
+        }
+        data.truncate(filled);
+        Ok(Data { id, data })
+    }
+
+    async fn write(
+        &mut self,
+        id: u32,
+        handle: String,
+        offset: u64,
+        data: Vec<u8>,
+    ) -> Result<Status, StatusCode> {
+        let Some(Opened::File(file)) = self.handles.get_mut(&handle) else {
+            return Err(StatusCode::NoSuchFile);
+        };
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|_| StatusCode::Failure)?;
+        file.write_all(&data).map_err(|_| StatusCode::Failure)?;
+        Ok(ok(id))
+    }
+
+    async fn fstat(&mut self, id: u32, handle: String) -> Result<Attrs, StatusCode> {
+        let Some(Opened::File(file)) = self.handles.get(&handle) else {
+            return Err(StatusCode::NoSuchFile);
+        };
+        let meta = file.metadata().map_err(|_| StatusCode::Failure)?;
+        Ok(Attrs {
             id,
-            status_code: StatusCode::Ok,
-            error_message: "Ok".into(),
-            language_tag: "en".into(),
+            attrs: FileAttributes::from(&meta),
         })
+    }
+
+    async fn setstat(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, StatusCode> {
+        if let Some(mtime) = attrs.mtime {
+            let when = std::time::UNIX_EPOCH + Duration::from_secs(u64::from(mtime));
+            std::fs::File::options()
+                .write(true)
+                .open(self.resolve(&path))
+                .and_then(|file| file.set_modified(when))
+                .map_err(|_| StatusCode::NoSuchFile)?;
+        }
+        Ok(ok(id))
+    }
+
+    async fn mkdir(
+        &mut self,
+        id: u32,
+        path: String,
+        _attrs: FileAttributes,
+    ) -> Result<Status, StatusCode> {
+        std::fs::create_dir(self.resolve(&path)).map_err(|_| StatusCode::Failure)?;
+        Ok(ok(id))
+    }
+
+    async fn remove(&mut self, id: u32, filename: String) -> Result<Status, StatusCode> {
+        std::fs::remove_file(self.resolve(&filename)).map_err(|_| StatusCode::NoSuchFile)?;
+        Ok(ok(id))
+    }
+
+    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, StatusCode> {
+        std::fs::remove_dir(self.resolve(&path)).map_err(|_| StatusCode::Failure)?;
+        Ok(ok(id))
+    }
+
+    async fn rename(
+        &mut self,
+        id: u32,
+        oldpath: String,
+        newpath: String,
+    ) -> Result<Status, StatusCode> {
+        std::fs::rename(self.resolve(&oldpath), self.resolve(&newpath))
+            .map_err(|_| StatusCode::NoSuchFile)?;
+        Ok(ok(id))
     }
 
     async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, StatusCode> {
@@ -885,5 +1022,378 @@ async fn the_connection_registry_shares_one_sftp_channel_per_session() {
             .code(),
         "SFTP_ERROR"
     );
+    std::fs::remove_dir_all(&server.sftp_root).ok();
+}
+
+// ---------------------------------------------------------------------------
+// Transfer engine tests
+// ---------------------------------------------------------------------------
+
+/// An engine whose every emitted snapshot is kept, so a test can assert on
+/// the sequence of states as well as the last one.
+fn collecting_engine() -> (Arc<Engine>, Arc<Mutex<Vec<Transfer>>>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let engine = Engine::new(Arc::new(move |transfer: &Transfer| {
+        sink.lock().unwrap().push(transfer.clone());
+    }));
+    (engine, seen)
+}
+
+/// Polls until the transfer satisfies `done`, or fails after fifteen seconds.
+async fn wait_for(engine: &Engine, id: &str, done: impl Fn(&Transfer) -> bool) -> Transfer {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let transfer = engine.get(id).expect("the transfer exists");
+        if done(&transfer) {
+            return transfer;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting; last state {:?} ({:?})",
+            transfer.state,
+            transfer.error
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+fn finished(transfer: &Transfer) -> bool {
+    transfer.state.is_finished()
+}
+
+fn temp_local() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("harbour-xfer-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// One fresh connection, with an SFTP channel on it. The transport is leaked
+/// on purpose: dropping it would close the connection under the channel, and
+/// a test process ends soon enough anyway.
+async fn connect_sftp(server: &RunningServer) -> Arc<russh_sftp::client::SftpSession> {
+    let connected = client::connect(
+        request(server.addr, vec![AuthChoice::Password]),
+        ScriptedAsker::trusting(PASSWORD),
+        Arc::new(temp_known_hosts()),
+        |_, _| {},
+    )
+    .await
+    .expect("the connection should succeed");
+    let opener = connected.transport.opener();
+    Box::leak(Box::new(connected.transport));
+    Arc::new(sftp::open(&opener).await.expect("sftp"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn uploads_a_tree_downloads_it_back_and_keeps_time_stamps() {
+    let server = start_server().await;
+    let sftp = connect_sftp(&server).await;
+    let (engine, seen) = collecting_engine();
+
+    let local = temp_local();
+    std::fs::create_dir_all(local.join("project").join("src")).unwrap();
+    std::fs::write(local.join("project").join("README.md"), "# hello").unwrap();
+    std::fs::write(
+        local.join("project").join("src").join("main.rs"),
+        "fn main() {}",
+    )
+    .unwrap();
+    let stamped = local.join("project").join("README.md");
+    std::fs::File::options()
+        .write(true)
+        .open(&stamped)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000))
+        .unwrap();
+
+    let up = engine.enqueue(
+        "s1".into(),
+        Arc::clone(&sftp),
+        Request {
+            direction: Direction::Upload,
+            source: local.join("project").display().to_string(),
+            destination: "/project".into(),
+        },
+        ConflictPolicy::Ask,
+    );
+    let up = wait_for(&engine, &up.id, finished).await;
+
+    assert_eq!(up.state, TransferState::Done, "{:?}", up.error);
+    assert_eq!(up.files_total, 2);
+    assert_eq!(up.files_done, 2);
+    assert_eq!(up.bytes_total, 7 + 12);
+    assert_eq!(up.bytes_done, up.bytes_total);
+    assert_eq!(
+        std::fs::read_to_string(server.sftp_root.join("project").join("src").join("main.rs"))
+            .unwrap(),
+        "fn main() {}"
+    );
+    let remote_readme =
+        std::fs::metadata(server.sftp_root.join("project").join("README.md")).unwrap();
+    assert_eq!(
+        remote_readme
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+        1_600_000_000,
+        "the source's time stamp travels with the file"
+    );
+
+    // The states went queued -> running -> done, and progress was reported.
+    let states: Vec<TransferState> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|t| t.id == up.id)
+        .map(|t| t.state)
+        .collect();
+    assert_eq!(states.first(), Some(&TransferState::Queued));
+    assert!(states.contains(&TransferState::Running));
+    assert_eq!(states.last(), Some(&TransferState::Done));
+
+    let back = local.join("back");
+    let down = engine.enqueue(
+        "s1".into(),
+        Arc::clone(&sftp),
+        Request {
+            direction: Direction::Download,
+            source: "/project".into(),
+            destination: back.display().to_string(),
+        },
+        ConflictPolicy::Ask,
+    );
+    let down = wait_for(&engine, &down.id, finished).await;
+
+    assert_eq!(down.state, TransferState::Done, "{:?}", down.error);
+    assert_eq!(
+        std::fs::read_to_string(back.join("README.md")).unwrap(),
+        "# hello"
+    );
+    assert_eq!(
+        std::fs::read_to_string(back.join("src").join("main.rs")).unwrap(),
+        "fn main() {}"
+    );
+    std::fs::remove_dir_all(&local).ok();
+    std::fs::remove_dir_all(&server.sftp_root).ok();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conflict_stops_to_ask_and_the_answer_can_cover_the_rest() {
+    let server = start_server().await;
+    let sftp = connect_sftp(&server).await;
+    let (engine, _) = collecting_engine();
+
+    let local = temp_local();
+    std::fs::create_dir_all(local.join("dir")).unwrap();
+    std::fs::write(local.join("dir").join("a.txt"), "new a").unwrap();
+    std::fs::write(local.join("dir").join("b.txt"), "new b").unwrap();
+    std::fs::create_dir_all(server.sftp_root.join("dir")).unwrap();
+    std::fs::write(server.sftp_root.join("dir").join("a.txt"), "old a").unwrap();
+    std::fs::write(server.sftp_root.join("dir").join("b.txt"), "old b").unwrap();
+
+    let transfer = engine.enqueue(
+        "s1".into(),
+        Arc::clone(&sftp),
+        Request {
+            direction: Direction::Upload,
+            source: local.join("dir").display().to_string(),
+            destination: "/dir".into(),
+        },
+        ConflictPolicy::Ask,
+    );
+
+    let stopped = wait_for(&engine, &transfer.id, |t| {
+        t.state == TransferState::Conflict
+    })
+    .await;
+    let conflict = stopped.conflict.expect("the conflict is described");
+    assert_eq!(conflict.path, "/dir/a.txt");
+    assert_eq!(conflict.source_size, 5);
+    assert_eq!(conflict.destination_size, 5);
+    assert!(!conflict.resumable);
+
+    // Answer once for everything: the second file must not ask again.
+    engine
+        .resolve(&transfer.id, Resolution::Skip, true)
+        .unwrap();
+    let done = wait_for(&engine, &transfer.id, finished).await;
+
+    assert_eq!(done.state, TransferState::Skipped, "{:?}", done.error);
+    assert_eq!(done.files_done, 2);
+    assert_eq!(
+        std::fs::read_to_string(server.sftp_root.join("dir").join("a.txt")).unwrap(),
+        "old a"
+    );
+    assert_eq!(
+        std::fs::read_to_string(server.sftp_root.join("dir").join("b.txt")).unwrap(),
+        "old b"
+    );
+
+    // Resolving something that is not waiting is an error, not a hang.
+    assert_eq!(
+        engine
+            .resolve(&transfer.id, Resolution::Overwrite, false)
+            .unwrap_err()
+            .code(),
+        "TRANSFER_ERROR"
+    );
+    std::fs::remove_dir_all(&local).ok();
+    std::fs::remove_dir_all(&server.sftp_root).ok();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_continues_a_partial_copy_and_rename_writes_beside() {
+    let server = start_server().await;
+    let sftp = connect_sftp(&server).await;
+    let (engine, _) = collecting_engine();
+
+    let local = temp_local();
+    let payload: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(local.join("big.bin"), &payload).unwrap();
+    // The remote already holds the first third: a copy that was interrupted.
+    std::fs::write(server.sftp_root.join("big.bin"), &payload[..100_000]).unwrap();
+
+    let resumed = engine.enqueue(
+        "s1".into(),
+        Arc::clone(&sftp),
+        Request {
+            direction: Direction::Upload,
+            source: local.join("big.bin").display().to_string(),
+            destination: "/big.bin".into(),
+        },
+        ConflictPolicy::Resume,
+    );
+    let resumed = wait_for(&engine, &resumed.id, finished).await;
+    assert_eq!(resumed.state, TransferState::Done, "{:?}", resumed.error);
+    assert_eq!(
+        std::fs::read(server.sftp_root.join("big.bin")).unwrap(),
+        payload
+    );
+    assert_eq!(
+        resumed.bytes_done, 300_000,
+        "the resumed bytes count as done"
+    );
+
+    // Downloading it back with rename leaves the original and writes beside.
+    std::fs::write(local.join("big.bin"), b"local copy").unwrap();
+    let renamed = engine.enqueue(
+        "s1".into(),
+        Arc::clone(&sftp),
+        Request {
+            direction: Direction::Download,
+            source: "/big.bin".into(),
+            destination: local.join("big.bin").display().to_string(),
+        },
+        ConflictPolicy::Rename,
+    );
+    let renamed = wait_for(&engine, &renamed.id, finished).await;
+    assert_eq!(renamed.state, TransferState::Done, "{:?}", renamed.error);
+    assert_eq!(std::fs::read(local.join("big.bin")).unwrap(), b"local copy");
+    assert_eq!(std::fs::read(local.join("big (1).bin")).unwrap(), payload);
+    std::fs::remove_dir_all(&local).ok();
+    std::fs::remove_dir_all(&server.sftp_root).ok();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pause_holds_the_copy_and_cancel_ends_it() {
+    let server = start_server().await;
+    let sftp = connect_sftp(&server).await;
+    let (engine, _) = collecting_engine();
+
+    let local = temp_local();
+    std::fs::write(local.join("large.bin"), vec![7u8; 4 * 1024 * 1024]).unwrap();
+
+    let transfer = engine.enqueue(
+        "s1".into(),
+        Arc::clone(&sftp),
+        Request {
+            direction: Direction::Upload,
+            source: local.join("large.bin").display().to_string(),
+            destination: "/large.bin".into(),
+        },
+        ConflictPolicy::Overwrite,
+    );
+    engine.pause(&transfer.id).unwrap();
+
+    let paused = wait_for(&engine, &transfer.id, |t| t.state == TransferState::Paused).await;
+    assert!(
+        paused.bytes_done < paused.bytes_total,
+        "it stopped part way"
+    );
+    let held = paused.bytes_done;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        engine.get(&transfer.id).unwrap().bytes_done,
+        held,
+        "nothing moves while paused"
+    );
+
+    engine.cancel(&transfer.id).unwrap();
+    let cancelled = wait_for(&engine, &transfer.id, finished).await;
+    assert_eq!(cancelled.state, TransferState::Cancelled);
+
+    // A finished transfer can be forgotten; a queued one can be cancelled
+    // before it ever runs.
+    engine.remove(&transfer.id).unwrap();
+    assert_eq!(
+        engine.get(&transfer.id).unwrap_err().code(),
+        "TRANSFER_NOT_FOUND"
+    );
+    std::fs::remove_dir_all(&local).ok();
+    std::fs::remove_dir_all(&server.sftp_root).ok();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_closing_session_cancels_what_was_queued_on_it() {
+    let server = start_server().await;
+    let sftp = connect_sftp(&server).await;
+    let (engine, _) = collecting_engine();
+    let local = temp_local();
+    std::fs::write(local.join("x.bin"), vec![1u8; 2 * 1024 * 1024]).unwrap();
+
+    let ids: Vec<String> = (0..4)
+        .map(|n| {
+            engine
+                .enqueue(
+                    "s1".into(),
+                    Arc::clone(&sftp),
+                    Request {
+                        direction: Direction::Upload,
+                        source: local.join("x.bin").display().to_string(),
+                        destination: format!("/x{n}.bin"),
+                    },
+                    ConflictPolicy::Overwrite,
+                )
+                .id
+        })
+        .collect();
+    engine.cancel_session("s1");
+
+    for id in &ids {
+        let transfer = wait_for(&engine, id, finished).await;
+        assert!(
+            matches!(
+                transfer.state,
+                TransferState::Cancelled | TransferState::Done
+            ),
+            "{:?}",
+            transfer.state
+        );
+    }
+    let cancelled = engine
+        .list()
+        .iter()
+        .filter(|t| t.state == TransferState::Cancelled)
+        .count();
+    assert!(
+        cancelled >= 2,
+        "at least the ones beyond the two slots never ran"
+    );
+    assert_eq!(engine.clear_finished(), 4);
+    assert!(engine.list().is_empty());
+    std::fs::remove_dir_all(&local).ok();
     std::fs::remove_dir_all(&server.sftp_root).ok();
 }

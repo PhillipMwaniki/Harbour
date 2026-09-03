@@ -8,19 +8,21 @@ pub mod settings;
 pub mod ssh;
 pub mod telemetry;
 pub mod text;
+pub mod transfer;
 pub mod vault;
 pub mod xts;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::prompt::Prompts;
 use crate::session::manager::SessionManager;
 use crate::settings::store::SettingsStore;
 use crate::ssh::known_hosts::KnownHosts;
 use crate::ssh::sftp::Connections;
+use crate::transfer::engine::Engine;
 use crate::vault::store::Vault;
 
 /// Everything the command handlers need. Kept deliberately small: each
@@ -44,6 +46,9 @@ pub struct AppState {
     /// The SSH connection behind each live SSH session, so the file pane can
     /// open SFTP on it. The session manager itself knows nothing about SSH.
     pub connections: Arc<Connections>,
+    /// The transfer queue. Every change to a transfer goes out as a
+    /// `transfer:update` event carrying the whole transfer.
+    pub transfers: Arc<Engine>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -75,6 +80,13 @@ pub fn run() {
                 })
                 .expect("an in-memory vault must always open");
 
+            // The engines report through events; they get a handle to emit
+            // with and nothing else about the app.
+            let transfer_events = app.handle().clone();
+            let transfers = Engine::new(Arc::new(move |transfer| {
+                let _ = transfer_events.emit("transfer:update", transfer);
+            }));
+
             app.manage(AppState {
                 sessions: Arc::new(SessionManager::new()),
                 prompts: Prompts::new(),
@@ -85,6 +97,7 @@ pub fn run() {
                 settings: Arc::new(SettingsStore::open(config_dir.join("settings.json"))),
                 log_dir: log_dir.clone(),
                 connections: Connections::new(),
+                transfers,
             });
 
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "harbour starting");
@@ -138,6 +151,14 @@ pub fn run() {
             commands::sftp::local_mkdir,
             commands::sftp::local_rename,
             commands::sftp::local_remove,
+            commands::transfer::transfer_enqueue,
+            commands::transfer::transfer_list,
+            commands::transfer::transfer_pause,
+            commands::transfer::transfer_resume,
+            commands::transfer::transfer_cancel,
+            commands::transfer::transfer_resolve,
+            commands::transfer::transfer_remove,
+            commands::transfer::transfer_clear_finished,
         ])
         .on_window_event(|window, event| {
             // Killing children on window close keeps orphan shells from

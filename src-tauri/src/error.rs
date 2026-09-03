@@ -85,6 +85,12 @@ pub enum AppError {
     #[error("{path}: {reason}")]
     Files { path: String, reason: String },
 
+    #[error("transfer: {0}")]
+    Transfer(String),
+
+    #[error("no transfer with id {0}")]
+    TransferNotFound(String),
+
     #[error("prompt {0} is no longer waiting for an answer")]
     PromptNotFound(String),
 
@@ -124,6 +130,8 @@ impl AppError {
             AppError::LogFailed(_) => "LOG_FAILED",
             AppError::Sftp(_) => "SFTP_ERROR",
             AppError::Files { .. } => "FILES_ERROR",
+            AppError::Transfer(_) => "TRANSFER_ERROR",
+            AppError::TransferNotFound(_) => "TRANSFER_NOT_FOUND",
             AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
             AppError::PromptTimedOut => "PROMPT_TIMED_OUT",
             AppError::Internal(_) => "INTERNAL",

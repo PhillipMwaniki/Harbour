@@ -51,6 +51,7 @@ pub async fn ssh_connect(
     let exit_id = id.clone();
     let exit_manager = state.sessions.clone();
     let exit_connections = Arc::clone(&state.connections);
+    let exit_transfers = Arc::clone(&state.transfers);
     let exit_app = app.clone();
 
     let asker = Arc::new(EventAsker::new(app.clone(), Arc::clone(&state.prompts)));
@@ -69,6 +70,7 @@ pub async fn ssh_connect(
             let closed = SessionClosed::new(exit_id, reason, code);
             exit_manager.remove(&closed.session_id);
             exit_connections.remove(&closed.session_id);
+            exit_transfers.cancel_session(&closed.session_id);
             if let Err(err) = exit_app.emit("session:closed", &closed) {
                 tracing::warn!(error = %err, "failed to emit session:closed");
             }
