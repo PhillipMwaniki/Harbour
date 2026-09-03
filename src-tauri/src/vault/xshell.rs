@@ -2,7 +2,12 @@
 //!
 //! An Xshell export is a directory of `.xsh` files - INI-shaped text, one file
 //! per session, with the session manager's folder tree mirrored as
-//! subdirectories. This module turns that into [`ImportedHost`] records.
+//! subdirectories. A `.xts` backup is the same tree inside a ZIP, read
+//! through [`crate::xts`]. Either way this module turns the files into
+//! [`ImportedHost`] records.
+//!
+//! The files are UTF-16LE with a byte order mark - see [`crate::text`] - and
+//! reading them as anything else finds no sections at all.
 //!
 //! **Passwords are deliberately not decoded.** Xshell stores `Password=` as a
 //! ciphertext tied to the Windows account (and, when set, a master password),
@@ -17,6 +22,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::text;
+use crate::xts;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
@@ -26,6 +34,7 @@ pub enum Protocol {
     Serial,
     Sftp,
     Ftp,
+    Rdp,
     Unknown,
 }
 
@@ -38,6 +47,7 @@ impl Protocol {
             "serial" => Protocol::Serial,
             "sftp" => Protocol::Sftp,
             "ftp" => Protocol::Ftp,
+            "rdp" => Protocol::Rdp,
             _ => Protocol::Unknown,
         }
     }
@@ -48,6 +58,7 @@ impl Protocol {
             Protocol::Telnet => 23,
             Protocol::Rlogin => 513,
             Protocol::Ftp => 21,
+            Protocol::Rdp => 3389,
             Protocol::Serial | Protocol::Unknown => 0,
         }
     }
@@ -121,31 +132,8 @@ pub enum ParseError {
     MissingHost,
 }
 
-/// Case-insensitive INI, tolerant of the quirks real `.xsh` files show:
-/// a UTF-8 BOM, CRLF endings, `;`/`#` comments, blank lines, and values that
-/// themselves contain `=`.
 fn parse_ini(contents: &str) -> BTreeMap<String, BTreeMap<String, String>> {
-    let mut sections: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    let mut current = String::new();
-
-    for raw_line in contents.trim_start_matches('\u{feff}').lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
-            continue;
-        }
-        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            current = name.trim().to_ascii_uppercase();
-            sections.entry(current.clone()).or_default();
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            sections
-                .entry(current.clone())
-                .or_default()
-                .insert(key.trim().to_ascii_uppercase(), value.trim().to_string());
-        }
-    }
-    sections
+    text::ini(contents)
 }
 
 fn get<'a>(
@@ -153,11 +141,7 @@ fn get<'a>(
     section: &str,
     key: &str,
 ) -> Option<&'a str> {
-    sections
-        .get(section)?
-        .get(key)
-        .map(|value| value.as_str())
-        .filter(|value| !value.is_empty())
+    text::ini_get(sections, section, key)
 }
 
 /// Parses one `.xsh` file. `name` is the session name (the file stem) and
@@ -262,10 +246,10 @@ fn visit(dir: &Path, folder: &mut Vec<String>, report: &mut ImportReport) -> std
             .unwrap_or_default();
 
         match std::fs::read(&path) {
-            // `.xsh` files are usually UTF-8 but may carry a BOM or stray
-            // non-UTF-8 bytes in a description; lossy is the right trade here.
             Ok(bytes) => {
-                let contents = String::from_utf8_lossy(&bytes);
+                // UTF-16LE with a BOM, as Xshell writes them; `decode` also
+                // copes with the UTF-8 a hand-written file might use.
+                let contents = text::decode(&bytes);
                 match parse_session(&name, folder.clone(), &contents) {
                     Ok(host) => report.hosts.push(host),
                     Err(err) => report.skipped.push(SkippedFile {
@@ -283,9 +267,33 @@ fn visit(dir: &Path, folder: &mut Vec<String>, report: &mut ImportReport) -> std
     Ok(())
 }
 
+/// Reads every session out of an open `.xts` backup. Same result as
+/// [`import_tree`], with the archive's own paths in `skipped`.
+pub fn import_archive(archive: &mut xts::Archive) -> std::io::Result<ImportReport> {
+    let mut report = ImportReport {
+        hosts: Vec::new(),
+        skipped: Vec::new(),
+    };
+    for file in archive.sessions()? {
+        match parse_session(&file.name, file.folder.clone(), &file.text) {
+            Ok(host) => report.hosts.push(host),
+            Err(err) => report.skipped.push(SkippedFile {
+                path: std::iter::once("Xshell".to_string())
+                    .chain(file.folder)
+                    .chain(std::iter::once(format!("{}.xsh", file.name)))
+                    .collect::<Vec<_>>()
+                    .join("/"),
+                reason: err.to_string(),
+            }),
+        }
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::xts::test_support::{archive, cleanup, utf16};
 
     const XSHELL_6: &str = "\
 [SessionInfo]
@@ -389,6 +397,14 @@ Method=Password
     }
 
     #[test]
+    fn rdp_sessions_are_named_so_the_skip_reason_reads() {
+        let contents = "[CONNECTION]\nProtocol=RDP\nHost=desk\n";
+        let host = parse_session("desk", vec![], contents).unwrap();
+        assert_eq!(host.protocol, Protocol::Rdp);
+        assert_eq!(host.port, 3389);
+    }
+
+    #[test]
     fn unknown_protocols_do_not_lose_the_host() {
         let contents = "[CONNECTION]\nProtocol=QUIC-THING\nHost=box\n";
         let host = parse_session("box", vec![], contents).unwrap();
@@ -435,6 +451,54 @@ Method=Password
 
         assert_eq!(report.skipped.len(), 1);
         assert!(report.skipped[0].path.ends_with("broken.xsh"));
+    }
+
+    /// Xshell writes UTF-16LE with a byte order mark. A UTF-8 fixture passes
+    /// while every real file is skipped, which is exactly what happened.
+    #[test]
+    fn reads_the_utf16_files_xshell_actually_writes() {
+        let root = std::env::temp_dir().join(format!("harbour-xsh16-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Web.xsh"), utf16(XSHELL_6)).unwrap();
+
+        let report = import_tree(&root).unwrap();
+        std::fs::remove_dir_all(&root).ok();
+
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        assert_eq!(report.hosts.len(), 1);
+        assert_eq!(report.hosts[0].hostname, "10.20.30.40");
+        assert_eq!(report.hosts[0].username.as_deref(), Some("deploy"));
+    }
+
+    #[test]
+    fn reads_sessions_straight_out_of_a_backup() {
+        let path = archive(
+            "backup.xts",
+            &[
+                ("Xshell/jump.xsh", utf16(XSHELL_6)),
+                (
+                    "Xshell/Prod/EU/db-1.xsh",
+                    utf16("[CONNECTION]\r\nProtocol=SSH\r\nHost=db1.eu\r\n"),
+                ),
+                (
+                    "Xshell/Prod/broken.xsh",
+                    utf16("[TERMINAL]\r\nType=xterm\r\n"),
+                ),
+                ("com/SECSH/UserKeys/id_rsa.pri", b"PRIVATE".to_vec()),
+            ],
+        );
+        let mut backup = xts::Archive::open(&path).unwrap();
+
+        let report = import_archive(&mut backup).unwrap();
+        cleanup(&path);
+
+        assert_eq!(report.hosts.len(), 2);
+        assert_eq!(report.hosts[0].name, "jump");
+        assert_eq!(report.hosts[1].name, "db-1");
+        assert_eq!(report.hosts[1].folder, vec!["Prod", "EU"]);
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].path, "Xshell/Prod/broken.xsh");
+        assert_eq!(report.skipped[0].reason, "no [CONNECTION] section");
     }
 
     #[test]

@@ -6,7 +6,9 @@ pub mod session;
 pub mod settings;
 pub mod ssh;
 pub mod telemetry;
+pub mod text;
 pub mod vault;
+pub mod xts;
 
 use std::path::PathBuf;
 use std::sync::Arc;
