@@ -285,6 +285,14 @@ export interface LoggingSettings {
   nameTemplate: string;
 }
 
+/** One saved command, inserted into a terminal from the snippet palette. */
+export interface Snippet {
+  id: string;
+  label: string;
+  /** Inserted verbatim - a trailing newline runs it, its absence waits. */
+  text: string;
+}
+
 /** The whole settings document, as stored in `settings.json`. */
 export interface Settings {
   version: number;
@@ -298,6 +306,7 @@ export interface Settings {
   /** Action id -> chords. Absent means the built-in binding; `[]` unbinds. */
   keymap: Record<string, string[]>;
   highlights: HighlightRule[];
+  snippets: Snippet[];
   logging: LoggingSettings;
 }
 

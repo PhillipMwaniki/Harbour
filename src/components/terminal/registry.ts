@@ -16,6 +16,9 @@ export interface PaneHandle {
   closeSearch: () => void;
   /** Selected text, for a copy shortcut. Empty when nothing is selected. */
   selection: () => string;
+  /** Inserts text as if pasted - a snippet. Goes through the shell's input,
+   * with bracketed paste where the remote enabled it. */
+  paste: (text: string) => void;
 }
 
 const handles = new Map<string, PaneHandle>();

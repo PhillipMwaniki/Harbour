@@ -25,6 +25,7 @@ export type ActionId =
   | "sessions.toggle"
   | "files.toggle"
   | "forwards.toggle"
+  | "snippets.open"
   | "search.open"
   | "settings.open"
   | "log.toggle"
@@ -85,6 +86,7 @@ export const actions: ActionSpec[] = [
   },
   { id: "files.toggle", label: "Show or hide the file panes", group: "View", defaults: ["Ctrl+Shift+S"] },
   { id: "forwards.toggle", label: "Show or hide port forwards", group: "View", defaults: ["Ctrl+Shift+P"] },
+  { id: "snippets.open", label: "Insert a snippet", group: "Terminals", defaults: ["Ctrl+Shift+I"] },
   { id: "settings.open", label: "Settings", group: "View", defaults: ["Ctrl+,"] },
   { id: "log.toggle", label: "Start or stop logging", group: "View", defaults: ["Ctrl+Shift+L"] },
   { id: "font.increase", label: "Larger text", group: "View", defaults: ["Ctrl+="] },

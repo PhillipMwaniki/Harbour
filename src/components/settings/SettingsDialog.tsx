@@ -15,12 +15,13 @@ import {
 import { allThemes } from "@/lib/themes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, useSettings } from "@/stores/settings";
 
-type Section = "appearance" | "keyboard" | "highlights" | "logging";
+type Section = "appearance" | "keyboard" | "highlights" | "snippets" | "logging";
 
 const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "keyboard", label: "Keyboard" },
   { id: "highlights", label: "Highlights" },
+  { id: "snippets", label: "Snippets" },
   { id: "logging", label: "Logging" },
 ];
 
@@ -91,6 +92,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           {section === "appearance" && <Appearance />}
           {section === "keyboard" && <Keyboard />}
           {section === "highlights" && <Highlights />}
+          {section === "snippets" && <Snippets />}
           {section === "logging" && <Logging />}
         </div>
 
@@ -776,6 +778,91 @@ function ColourField({
         </button>
       )}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Snippets
+// ---------------------------------------------------------------------------
+
+function newSnippetId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `snippet-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function Snippets() {
+  const snippets = useSettings((state) => state.settings.snippets);
+  const update = useSettings((state) => state.update);
+
+  const change = (id: string, patch: Partial<{ label: string; text: string }>) =>
+    void update((current) => ({
+      ...current,
+      snippets: current.snippets.map((snippet) =>
+        snippet.id === id ? { ...snippet, ...patch } : snippet,
+      ),
+    }));
+
+  const remove = (id: string) =>
+    void update((current) => ({
+      ...current,
+      snippets: current.snippets.filter((snippet) => snippet.id !== id),
+    }));
+
+  const add = () =>
+    void update((current) => ({
+      ...current,
+      snippets: [...current.snippets, { id: newSnippetId(), label: "", text: "" }],
+    }));
+
+  return (
+    <div>
+      <p className="mb-2 text-[var(--hb-fg-muted)]">
+        Saved commands, inserted from the palette (Ctrl+Shift+I). The text is sent verbatim: a
+        trailing newline runs it, its absence leaves it on the prompt to edit.
+      </p>
+
+      <div className="space-y-2">
+        {snippets.length === 0 && <p className="text-[var(--hb-fg-muted)]">No snippets yet.</p>}
+        {snippets.map((snippet) => (
+          <div key={snippet.id} className="rounded border border-[var(--hb-border)] p-2">
+            <div className="flex items-center gap-2">
+              <input
+                aria-label="Snippet name"
+                className="flex-1 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
+                value={snippet.label}
+                placeholder="Name (optional)"
+                onChange={(event) => change(snippet.id, { label: event.target.value })}
+              />
+              <button
+                type="button"
+                aria-label={`Delete ${snippet.label || "snippet"}`}
+                className="rounded px-2 py-1 text-[var(--hb-fg-muted)] hover:bg-[var(--hb-hover)] hover:text-[var(--hb-fg)]"
+                onClick={() => remove(snippet.id)}
+              >
+                &minus;
+              </button>
+            </div>
+            <textarea
+              aria-label="Snippet text"
+              className="mt-2 h-20 w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 font-mono"
+              value={snippet.text}
+              placeholder="The command to insert"
+              onChange={(event) => change(snippet.id, { text: event.target.value })}
+            />
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={add}
+        className="mt-3 rounded border border-[var(--hb-border)] px-3 py-1 hover:bg-[var(--hb-hover)]"
+      >
+        Add a snippet
+      </button>
+    </div>
   );
 }
 

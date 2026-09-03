@@ -8,6 +8,7 @@ import { HostKeyDialog } from "@/components/ssh/HostKeyDialog";
 import { SecretDialog } from "@/components/ssh/SecretDialog";
 import { PaneTree } from "@/components/terminal/PaneTree";
 import { PasteDialog } from "@/components/terminal/PasteDialog";
+import { SnippetPalette } from "@/components/terminal/SnippetPalette";
 import { paneHandle } from "@/components/terminal/registry";
 import { TabBar } from "@/components/terminal/TabBar";
 import { HostDialog } from "@/components/vault/HostDialog";
@@ -70,6 +71,7 @@ export default function App() {
   const [banner, setBanner] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>({ kind: "none" });
   const [sidebar, setSidebar] = useState(true);
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
   const bootstrapped = useRef(false);
 
   // Chrome colours live in CSS custom properties so a theme switch repaints
@@ -308,6 +310,9 @@ export default function App() {
           return;
         case "settings.open":
           setModal({ kind: "settings" });
+          return;
+        case "snippets.open":
+          setSnippetsOpen(true);
           return;
         case "log.toggle": {
           const pane = focused?.pane;
@@ -566,6 +571,17 @@ export default function App() {
       </div>
 
       <PasteDialog />
+
+      {snippetsOpen && (
+        <SnippetPalette
+          snippets={useSettings.getState().settings.snippets}
+          onInsert={(snippet) => {
+            const focused = focusedPane(useSessions.getState());
+            paneHandle(focused?.pane.paneId)?.paste(snippet.text);
+          }}
+          onClose={() => setSnippetsOpen(false)}
+        />
+      )}
     </div>
   );
 }

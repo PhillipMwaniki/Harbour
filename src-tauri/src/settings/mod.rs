@@ -59,6 +59,8 @@ pub struct Settings {
     /// an action mapped to an empty list is unbound on purpose.
     pub keymap: BTreeMap<String, Vec<String>>,
     pub highlights: Vec<HighlightRule>,
+    /// Saved commands, inserted into a terminal from the snippet palette.
+    pub snippets: Vec<Snippet>,
     pub logging: LoggingSettings,
 }
 
@@ -74,6 +76,7 @@ impl Default for Settings {
             host_themes: BTreeMap::new(),
             keymap: BTreeMap::new(),
             highlights: Vec::new(),
+            snippets: Vec::new(),
             logging: LoggingSettings::default(),
         }
     }
@@ -95,6 +98,10 @@ impl Settings {
         let mut rule_ids = std::collections::HashSet::new();
         self.highlights
             .retain(|rule| !rule.pattern.is_empty() && rule_ids.insert(rule.id.clone()));
+
+        let mut snippet_ids = std::collections::HashSet::new();
+        self.snippets
+            .retain(|snippet| !snippet.text.is_empty() && snippet_ids.insert(snippet.id.clone()));
     }
 }
 
@@ -193,6 +200,16 @@ impl Default for HighlightRule {
             enabled: true,
         }
     }
+}
+
+/// One saved command. `text` is inserted verbatim - trailing newline and all,
+/// so a snippet can run on insert or wait to be edited, exactly as written.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Snippet {
+    pub id: String,
+    pub label: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

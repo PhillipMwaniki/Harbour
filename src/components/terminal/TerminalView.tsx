@@ -268,6 +268,10 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
       openSearch: () => setSearchOpen(true),
       closeSearch: () => setSearchOpen(false),
       selection: () => term.getSelection(),
+      paste: (text) => {
+        term.paste(text);
+        term.focus();
+      },
     });
 
     return () => {

@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hostThemes: {},
   keymap: {},
   highlights: [],
+  snippets: [],
   logging: {
     directory: null,
     format: "plain",
