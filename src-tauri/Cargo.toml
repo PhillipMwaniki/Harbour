@@ -21,7 +21,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }
 portable-pty = "0.9"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
@@ -29,6 +29,18 @@ parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+# `ring` rather than the default `aws-lc-rs` backend: aws-lc-sys needs NASM on
+# Windows, which would put a C toolchain in front of anyone cloning the repo -
+# and in front of CI - for no functional gain.
+russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
+dirs = "6"
+hmac = "0.13"
+sha1 = "0.11"
+data-encoding = "2"
+
+[dev-dependencies]
+# The SSH integration tests stand up a real russh server, which needs a key.
+rand = "0.10"
 
 [features]
 # Enables the webview devtools in release builds; off by default.

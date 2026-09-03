@@ -1,0 +1,23 @@
+# cargo-audit configuration. See docs/security.md for the reasoning behind
+# anything ignored here; an entry without a written justification is a bug.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 - the Marvin attack against the `rsa` crate: RSA
+    # operations are not constant-time, so an attacker who can observe precise
+    # timing may recover the key. There is no patched version, and every Rust
+    # SSH implementation that supports RSA carries it.
+    #
+    # Kept because dropping RSA would mean refusing to connect to hosts that
+    # still present an `ssh-rsa` host key or expect an RSA user key, which is a
+    # large share of the estate this tool exists to reach.
+    #
+    # Scope in Harbour: a private RSA key is used to sign one authentication
+    # challenge per connection, to a server the user chose. Recovering a key
+    # this way needs a very large number of timed signatures from a host the
+    # user keeps connecting to. Ed25519 and ECDSA are unaffected, and are what
+    # Harbour will suggest when key generation lands in milestone 3.
+    #
+    # Revisit when `rsa` ships a constant-time implementation.
+    "RUSTSEC-2023-0071",
+]

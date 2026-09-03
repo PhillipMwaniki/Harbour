@@ -23,6 +23,44 @@ pub enum AppError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("could not reach {host}:{port}: {reason}")]
+    SshConnect {
+        host: String,
+        port: u16,
+        reason: String,
+    },
+
+    #[error("authentication failed for {user}@{host}: {reason}")]
+    SshAuth {
+        host: String,
+        user: String,
+        reason: String,
+    },
+
+    #[error("the host key for {host} was not accepted: {reason}")]
+    SshHostKeyRejected { host: String, reason: String },
+
+    #[error("the host key for {host} has changed; refusing to connect: {detail}")]
+    SshHostKeyChanged { host: String, detail: String },
+
+    #[error("ssh protocol error: {0}")]
+    Ssh(#[from] russh::Error),
+
+    #[error("could not load the key at {path}: {reason}")]
+    SshKeyLoad { path: String, reason: String },
+
+    #[error("no usable ssh agent: {0}")]
+    SshAgent(String),
+
+    #[error("the remote refused a channel: {0}")]
+    SshChannel(String),
+
+    #[error("prompt {0} is no longer waiting for an answer")]
+    PromptNotFound(String),
+
+    #[error("no answer to the prompt")]
+    PromptTimedOut,
+
     #[error("{0}")]
     Internal(String),
 }
@@ -38,6 +76,16 @@ impl AppError {
             AppError::PtyOpen(_) => "PTY_OPEN_FAILED",
             AppError::Spawn { .. } => "SPAWN_FAILED",
             AppError::Io(_) => "IO_ERROR",
+            AppError::SshConnect { .. } => "SSH_CONNECT_FAILED",
+            AppError::SshAuth { .. } => "SSH_AUTH_FAILED",
+            AppError::SshHostKeyRejected { .. } => "SSH_HOSTKEY_REJECTED",
+            AppError::SshHostKeyChanged { .. } => "SSH_HOSTKEY_CHANGED",
+            AppError::Ssh(_) => "SSH_PROTOCOL_ERROR",
+            AppError::SshKeyLoad { .. } => "SSH_KEY_LOAD_FAILED",
+            AppError::SshAgent(_) => "SSH_AGENT_UNAVAILABLE",
+            AppError::SshChannel(_) => "SSH_CHANNEL_FAILED",
+            AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
+            AppError::PromptTimedOut => "PROMPT_TIMED_OUT",
             AppError::Internal(_) => "INTERNAL",
         }
     }

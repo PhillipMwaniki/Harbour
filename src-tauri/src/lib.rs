@@ -1,6 +1,8 @@
 pub mod commands;
 pub mod error;
+pub mod prompt;
 pub mod session;
+pub mod ssh;
 pub mod telemetry;
 pub mod vault;
 
@@ -8,12 +10,18 @@ use std::sync::Arc;
 
 use tauri::Manager;
 
+use crate::prompt::Prompts;
 use crate::session::manager::SessionManager;
+use crate::ssh::known_hosts::KnownHosts;
 
 /// Everything the command handlers need. Kept deliberately small: each
 /// subsystem (vault, sftp, forwards) adds its own field as it lands.
 pub struct AppState {
     pub sessions: Arc<SessionManager>,
+    /// Outstanding questions to the user - host keys, credentials.
+    pub prompts: Arc<Prompts>,
+    /// Host key trust. Reads the user's OpenSSH files, writes only its own.
+    pub known_hosts: Arc<KnownHosts>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,8 +38,18 @@ pub fn run() {
             let guard = telemetry::init(&log_dir);
             app.manage(LogGuard(guard));
 
+            // Harbour's own known_hosts sits beside its config, never in
+            // ~/.ssh: the user's file is read but never written to.
+            let known_hosts = app
+                .path()
+                .app_config_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("harbour"))
+                .join("known_hosts");
+
             app.manage(AppState {
                 sessions: Arc::new(SessionManager::new()),
+                prompts: Prompts::new(),
+                known_hosts: Arc::new(KnownHosts::new(known_hosts)),
             });
 
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "harbour starting");
@@ -47,6 +65,8 @@ pub fn run() {
             commands::session::session_close,
             commands::session::session_list,
             commands::shell::shell_list,
+            commands::ssh::ssh_connect,
+            commands::ssh::connection_respond,
         ])
         .on_window_event(|window, event| {
             // Killing children on window close keeps orphan shells from

@@ -14,9 +14,10 @@ import {
   sessionSubscribe,
   sessionWrite,
 } from "@/ipc/session";
-import { errorMessage } from "@/ipc/types";
+import { sshConnect } from "@/ipc/ssh";
+import { errorMessage, type SessionInfo } from "@/ipc/types";
 import { defaultFontFamily } from "@/lib/themes";
-import { useSessions } from "@/stores/sessions";
+import { useSessions, type SessionTarget } from "@/stores/sessions";
 import { useTerminalTheme } from "@/stores/settings";
 
 const SCROLLBACK = 10_000;
@@ -28,8 +29,22 @@ function isWindows(): boolean {
 
 interface Props {
   tabId: string;
-  shellId?: string;
+  target: SessionTarget;
   visible: boolean;
+}
+
+/**
+ * Opens the session this tab is for, at the size the terminal has measured.
+ *
+ * Both transports are opened the same way and at the same moment for the same
+ * reason: the remote (or the pty) must be told the real window size before it
+ * draws its first prompt.
+ */
+function openSession(target: SessionTarget, cols: number, rows: number): Promise<SessionInfo> {
+  if (target.kind === "ssh") {
+    return sshConnect({ target: target.target, methods: target.methods, cols, rows });
+  }
+  return sessionOpen({ shellId: target.shellId, cols, rows });
 }
 
 /**
@@ -42,7 +57,7 @@ interface Props {
  * unmount this component, or scrollback and viewport state are lost. The
  * parent hides it with `display: none` instead.
  */
-export function TerminalView({ tabId, shellId, visible }: Props) {
+export function TerminalView({ tabId, target, visible }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -50,6 +65,10 @@ export function TerminalView({ tabId, shellId, visible }: Props) {
   // Read inside the mount effect without making the session depend on it.
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  // The target is a fresh object on every render; keeping it out of the effect
+  // deps is what stops a re-render from tearing down a live session.
+  const targetRef = useRef(target);
+  targetRef.current = target;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -108,7 +127,7 @@ export function TerminalView({ tabId, shellId, visible }: Props) {
 
     void (async () => {
       try {
-        const info = await sessionOpen({ shellId, cols: term.cols, rows: term.rows });
+        const info = await openSession(targetRef.current, term.cols, term.rows);
         if (disposed) return;
         useSessions.getState().attachSession(tabId, info);
 
@@ -160,7 +179,7 @@ export function TerminalView({ tabId, shellId, visible }: Props) {
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [tabId, shellId]);
+  }, [tabId]);
 
   // Theme changes must not tear down the session, so they are applied to the
   // live instance rather than being part of its construction.

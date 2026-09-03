@@ -11,6 +11,7 @@ interface Props {
   onSelect: (tabId: string) => void;
   onClose: (tabId: string) => void;
   onNew: (shellId?: string) => void;
+  onNewSsh: () => void;
 }
 
 function tabTooltip(tab: TerminalTab): string {
@@ -23,7 +24,15 @@ function tabTooltip(tab: TerminalTab): string {
   return tab.title;
 }
 
-export function TabBar({ tabs, activeTabId, shells, onSelect, onClose, onNew }: Props) {
+export function TabBar({
+  tabs,
+  activeTabId,
+  shells,
+  onSelect,
+  onClose,
+  onNew,
+  onNewSsh,
+}: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -106,6 +115,19 @@ export function TabBar({ tabs, activeTabId, shells, onSelect, onClose, onNew }: 
 
         {menuOpen && (
           <div className="absolute right-0 top-9 z-20 min-w-56 rounded-b border border-[var(--hb-border)] bg-[var(--hb-panel)] py-1 shadow-lg">
+            <button
+              type="button"
+              className="block w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--hb-hover)]"
+              onClick={() => {
+                setMenuOpen(false);
+                onNewSsh();
+              }}
+            >
+              SSH connection&hellip;
+              <span className="ml-2 text-[var(--hb-fg-muted)]">Ctrl+Shift+N</span>
+            </button>
+            <div className="my-1 border-t border-[var(--hb-border)]" />
+
             {shells.length === 0 && (
               <div className="px-3 py-2 text-xs text-[var(--hb-fg-muted)]">No shells detected</div>
             )}

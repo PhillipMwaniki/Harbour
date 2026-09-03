@@ -42,8 +42,30 @@ describe("sessions store", () => {
         default: true,
       },
     ]);
-    state().openTab("pwsh");
+    state().openTab({ kind: "local", shellId: "pwsh" });
     expect(state().tabs[0].title).toBe("PowerShell 7");
+  });
+
+  /// An SSH handshake can sit on a password prompt for a while, so the tab
+  /// has to say where it is going before the backend confirms it.
+  it("labels an ssh tab before the connection is made", () => {
+    state().openTab({
+      kind: "ssh",
+      target: { host: "example.com", port: 22, user: "deploy" },
+      methods: [{ kind: "agent" }],
+    });
+
+    expect(state().tabs[0].title).toBe("deploy@example.com");
+  });
+
+  it("shows a non-default port in the tab title", () => {
+    state().openTab({
+      kind: "ssh",
+      target: { host: "example.com", port: 2222, user: "deploy" },
+      methods: [],
+    });
+
+    expect(state().tabs[0].title).toBe("deploy@example.com:2222");
   });
 
   it("binds a session to its tab once the pty is up", () => {
@@ -113,6 +135,28 @@ describe("sessions store", () => {
     expect(state().tabs[1].exitCode).toBe(130);
   });
 
+  /// A dropped connection has to leave something behind to read; the tab is
+  /// the only place that can say which host went away.
+  it("records why a session died when it did not end on purpose", () => {
+    const a = state().openTab();
+    state().attachSession(a, info("s1"));
+
+    state().markSessionClosed("s1", null, "the connection was lost");
+
+    expect(state().tabs[0].status).toBe("closed");
+    expect(state().tabs[0].error).toBe("the connection was lost");
+  });
+
+  it("keeps an earlier error when a session closes without a new one", () => {
+    const a = state().openTab();
+    state().attachSession(a, info("s1"));
+    state().failTab(a, "could not reach example.com");
+
+    state().markSessionClosed("s1", 1);
+
+    expect(state().tabs[0].error).toBe("could not reach example.com");
+  });
+
   it("ignores a close for a session that was never attached", () => {
     const a = state().openTab();
     state().attachSession(a, info("s1"));
@@ -134,6 +178,7 @@ describe("tab lookup helpers", () => {
   const list = (...tabs: Array<[string, string | null]>): TerminalTab[] =>
     tabs.map(([tabId, sessionId]) => ({
       tabId,
+      target: { kind: "local" as const },
       sessionId,
       title: tabId,
       status: sessionId ? "live" : "starting",

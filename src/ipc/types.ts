@@ -6,7 +6,7 @@
  * a Rust type must be reflected here and in `docs/ipc.md` in the same commit.
  */
 
-export type SessionKind = "local";
+export type SessionKind = "local" | "ssh";
 
 export interface SessionInfo {
   sessionId: string;
@@ -31,6 +31,74 @@ export interface ShellSpec {
   default: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// SSH
+// ---------------------------------------------------------------------------
+
+export interface SshTarget {
+  host: string;
+  port: number;
+  user: string;
+}
+
+/**
+ * One authentication method to try, in the order given. Mirrors
+ * `AuthChoice` in `src-tauri/src/ssh/mod.rs`.
+ */
+export type AuthChoice =
+  | { kind: "agent" }
+  | { kind: "key"; path: string }
+  | { kind: "password" }
+  | { kind: "keyboardInteractive" };
+
+/** A host key already on file, as shown in the host key prompt. */
+export interface StoredKey {
+  algorithm: string;
+  fingerprint: string;
+  /** The file it came from - the user's `known_hosts`, or Harbour's own. */
+  source: string;
+  line: number;
+}
+
+export type HostKeyStatus = "unknown" | "changed";
+
+/** Payload of `connection:hostkey_prompt`. */
+export interface HostKeyPrompt {
+  promptId: string;
+  host: string;
+  port: number;
+  status: HostKeyStatus;
+  algorithm: string;
+  fingerprint: string;
+  /** What is already recorded: the key that changed, or keys of other types. */
+  stored: StoredKey[];
+}
+
+export type SecretKind = "password" | "passphrase" | "challenge";
+
+/** Payload of `connection:auth_prompt`. */
+export interface SecretPrompt {
+  promptId: string;
+  host: string;
+  user: string;
+  kind: SecretKind;
+  label: string;
+  /** Server-supplied context under keyboard-interactive; empty otherwise. */
+  instruction: string;
+  /** True only when the server says the answer is not a secret. */
+  echo: boolean;
+}
+
+export interface HostKeyAnswer {
+  accept: boolean;
+  remember: boolean;
+}
+
+export interface SecretAnswer {
+  /** `null` means the user dismissed the prompt. */
+  secret: string | null;
+}
+
 /** Stable error codes; see `AppError::code` on the Rust side. */
 export type AppErrorCode =
   | "SESSION_NOT_FOUND"
@@ -39,6 +107,16 @@ export type AppErrorCode =
   | "PTY_OPEN_FAILED"
   | "SPAWN_FAILED"
   | "IO_ERROR"
+  | "SSH_CONNECT_FAILED"
+  | "SSH_AUTH_FAILED"
+  | "SSH_HOSTKEY_REJECTED"
+  | "SSH_HOSTKEY_CHANGED"
+  | "SSH_KEY_LOAD_FAILED"
+  | "SSH_AGENT_UNAVAILABLE"
+  | "SSH_CHANNEL_FAILED"
+  | "SSH_PROTOCOL_ERROR"
+  | "PROMPT_NOT_FOUND"
+  | "PROMPT_TIMED_OUT"
   | "INTERNAL";
 
 export interface AppError {

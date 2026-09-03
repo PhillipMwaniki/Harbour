@@ -64,6 +64,38 @@ Best default first, with `default: true` on that entry. On Windows this
 enumerates PowerShell 7, Windows PowerShell, cmd, Git Bash and every installed
 WSL distribution; elsewhere `$SHELL` followed by the usual suspects.
 
+### Connections
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `ssh_connect` | `target: SshTarget`, `methods: AuthChoice[]`, `cols: number`, `rows: number` | `SessionInfo` |
+| `connection_respond` | `promptId: string`, `answer: object` | `void` |
+
+`ssh_connect` resolves only once the session is live. The host key and
+credential round-trips happen *inside* the call, as events, so the frontend has
+one promise to track and one place to render a failure. The returned
+`SessionInfo` has `kind: "ssh"`; everything after that - `session_subscribe`,
+`session_write`, `session_resize`, `session_close` - is the same as for a local
+shell.
+
+```ts
+type SshTarget = { host: string; port: number; user: string };
+
+type AuthChoice =
+  | { kind: "agent" }
+  | { kind: "key"; path: string }
+  | { kind: "password" }
+  | { kind: "keyboardInteractive" };
+```
+
+`methods` is tried in order, skipping any the server does not offer. An empty
+array means the backend's default: agent, password, keyboard-interactive.
+
+`connection_respond` answers whichever prompt raised `promptId`; the payload
+shape depends on the prompt and is validated where it is awaited. Answering an
+id that is no longer waiting - it timed out, or its connection died - returns
+`PROMPT_NOT_FOUND`.
+
 ## Events
 
 | Event | Payload |
@@ -72,8 +104,35 @@ WSL distribution; elsewhere `$SHELL` followed by the usual suspects.
 | `session:closed` | `{ sessionId, reason: "exit" \| "killed" \| "error", exitCode: number \| null }` |
 
 `session:closed` fires when the child process is reaped, whether it exited on
-its own or was killed by `session_close`. The session is already gone from the
-backend's map by the time the event arrives.
+its own or was killed by `session_close`. For an SSH session it fires when the
+remote shell exits (`"exit"`, with its status), when Harbour closed it
+(`"killed"`), or when the connection dropped underneath it (`"error"`). A local
+session reports `"exit"` with the status the OS gave, since a pty cannot tell
+the three apart. The session is already gone from the backend's map by the time
+the event arrives.
+
+### Connection prompts
+
+Both carry a `promptId` to pass back to `connection_respond`, and both block the
+connection attempt until they are answered or the five-minute timeout expires.
+
+| Event | Payload |
+| --- | --- |
+| `connection:hostkey_prompt` | `{ promptId, host, port, status, algorithm, fingerprint, stored }` |
+| `connection:auth_prompt` | `{ promptId, host, user, kind, label, instruction, echo }` |
+
+`status` is `"unknown"` (nothing on file: trust on first use) or `"changed"` (a
+key of the same type is on file and does not match). `stored` lists what is
+already recorded - the conflicting key, or keys of other types for the same
+host - each with `algorithm`, `fingerprint`, `source` and `line`. Answer with
+`{ accept: boolean, remember: boolean }`; `accept: false` aborts the connection
+with `SSH_HOSTKEY_REJECTED`.
+
+`kind` is `"password"`, `"passphrase"` or `"challenge"` (a question the server
+worded, under keyboard-interactive). `echo` is true only when the server says
+the answer is not secret. Answer with `{ secret: string | null }`, where `null`
+means the user dismissed the prompt: the attempt stops without spending another
+authentication try.
 
 ## Error codes
 
@@ -85,11 +144,24 @@ backend's map by the time the event arrives.
 | `PTY_OPEN_FAILED` | The OS refused to allocate a pty |
 | `SPAWN_FAILED` | The shell binary could not be started |
 | `IO_ERROR` | Read/write against the pty failed |
+| `SSH_CONNECT_FAILED` | The host could not be reached (DNS, routing, refused) |
+| `SSH_AUTH_FAILED` | Every method was exhausted, or the user cancelled |
+| `SSH_HOSTKEY_REJECTED` | The host key was refused, revoked, or a certificate |
+| `SSH_HOSTKEY_CHANGED` | Reserved for a non-interactive refusal on a changed key |
+| `SSH_KEY_LOAD_FAILED` | A key file could not be read or decrypted |
+| `SSH_AGENT_UNAVAILABLE` | No agent answered, or it holds no identities |
+| `SSH_CHANNEL_FAILED` | The remote refused a channel, pty or shell request |
+| `SSH_PROTOCOL_ERROR` | Anything russh reports below that level |
+| `PROMPT_NOT_FOUND` | `connection_respond` for a prompt no longer waiting |
+| `PROMPT_TIMED_OUT` | Nobody answered a prompt within five minutes |
 | `INTERNAL` | Unclassified; always a bug worth a log line |
+
+`SSH_AUTH_FAILED` carries a message naming what was tried, what the server
+never offered, and what it still accepts. "Authentication failed" on its own is
+useless when the real problem is `PasswordAuthentication no`.
 
 ## Not yet implemented
 
 The spec defines further domains - `host_*`, `sftp_*`, `transfer_*`,
-`forward_*`, `fleet_*`, and the interactive `connection:hostkey_prompt` /
-`connection:auth_prompt` round-trips. They are listed here so the naming stays
-consistent when they land, but no handler exists yet.
+`forward_*` and `fleet_*`. They are listed here so the naming stays consistent
+when they land, but no handler exists yet.

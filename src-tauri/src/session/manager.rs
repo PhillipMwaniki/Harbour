@@ -1,27 +1,23 @@
 //! Owns every live session and mediates all access to it.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
-use portable_pty::{ChildKiller, MasterPty, PtySize};
 use tokio::sync::mpsc;
 
 use crate::error::{AppError, AppResult};
 use crate::session::local::{self, SpawnOptions};
 use crate::session::reader::Backpressure;
 use crate::session::shell;
-use crate::session::{SessionClosed, SessionId, SessionInfo, SessionKind};
+use crate::session::{SessionClosed, SessionId, SessionInfo, SessionKind, Transport};
 
 pub struct SessionHandle {
     pub id: SessionId,
     pub kind: SessionKind,
     title: RwLock<String>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
-    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    transport: Box<dyn Transport>,
     /// Taken exactly once, by `session_subscribe`.
     output: Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
     pub backpressure: Backpressure,
@@ -41,22 +37,11 @@ impl SessionHandle {
     }
 
     pub fn write(&self, data: &[u8]) -> AppResult<()> {
-        let mut writer = self.writer.lock();
-        writer.write_all(data)?;
-        writer.flush()?;
-        Ok(())
+        self.transport.write(data)
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> AppResult<()> {
-        self.master
-            .lock()
-            .resize(PtySize {
-                rows: rows.max(1),
-                cols: cols.max(1),
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|err| AppError::internal(err.to_string()))
+        self.transport.resize(cols, rows)
     }
 
     /// Hands the raw output stream to the first caller; later callers get
@@ -69,7 +54,7 @@ impl SessionHandle {
     }
 
     fn kill(&self) {
-        let _ = self.killer.lock().kill();
+        self.transport.kill();
     }
 }
 
@@ -84,6 +69,25 @@ pub struct OpenLocal {
     pub rows: u16,
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
+}
+
+/// A live connection waiting to be registered with the manager.
+///
+/// Anything that can produce a [`Transport`] and a byte stream - a pty today,
+/// an SSH channel as of milestone 2 - becomes a session by handing one of
+/// these to [`SessionManager::adopt`].
+pub struct NewSession {
+    pub id: SessionId,
+    pub kind: SessionKind,
+    pub title: String,
+    pub transport: Box<dyn Transport>,
+    pub output: mpsc::Receiver<Vec<u8>>,
+}
+
+/// Session ids are minted before the session exists, because the exit callback
+/// has to be able to name the session it is reporting on.
+pub fn new_id() -> SessionId {
+    uuid::Uuid::new_v4().to_string()
 }
 
 impl SessionManager {
@@ -105,7 +109,7 @@ impl SessionManager {
                 .ok_or_else(|| AppError::ShellNotFound("default".into()))?,
         };
 
-        let id: SessionId = uuid::Uuid::new_v4().to_string();
+        let id = new_id();
         let exit_id = id.clone();
 
         let spawned = local::spawn(
@@ -116,33 +120,34 @@ impl SessionManager {
                 cwd: req.cwd,
                 env: req.env,
             },
-            move |code| {
-                on_exit(SessionClosed {
-                    session_id: exit_id,
-                    reason: if code.is_some() {
-                        "exit".into()
-                    } else {
-                        "error".into()
-                    },
-                    exit_code: code,
-                });
+            move |reason, code| {
+                on_exit(SessionClosed::new(exit_id, reason, code));
             },
         )?;
 
-        let handle = Arc::new(SessionHandle {
-            id: id.clone(),
+        Ok(self.adopt(NewSession {
+            id,
             kind: SessionKind::Local,
-            title: RwLock::new(spec.label.clone()),
-            master: Mutex::new(spawned.master),
-            writer: Mutex::new(spawned.writer),
-            killer: Mutex::new(spawned.killer),
-            output: Mutex::new(Some(spawned.output)),
+            title: spec.label.clone(),
+            transport: Box::new(spawned.transport),
+            output: spawned.output,
+        }))
+    }
+
+    /// Takes ownership of a connected session and starts tracking it.
+    pub fn adopt(&self, session: NewSession) -> SessionInfo {
+        let handle = Arc::new(SessionHandle {
+            id: session.id.clone(),
+            kind: session.kind,
+            title: RwLock::new(session.title),
+            transport: session.transport,
+            output: Mutex::new(Some(session.output)),
             backpressure: Backpressure::new(),
         });
 
         let info = handle.info();
-        self.sessions.write().insert(id, handle);
-        Ok(info)
+        self.sessions.write().insert(session.id, handle);
+        info
     }
 
     pub fn get(&self, id: &str) -> AppResult<Arc<SessionHandle>> {

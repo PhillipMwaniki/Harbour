@@ -3,11 +3,13 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
+use parking_lot::Mutex;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use tokio::sync::mpsc;
 
 use crate::error::{AppError, AppResult};
 use crate::session::shell::ShellSpec;
+use crate::session::{ExitReason, Transport};
 
 /// How many raw pty reads may queue before the reader thread blocks. The pump
 /// drains this quickly; the real throttle is the ack budget in `reader.rs`.
@@ -25,10 +27,44 @@ pub struct SpawnOptions<'a> {
 
 /// The live handles for a spawned pty, ready to be owned by a `SessionHandle`.
 pub struct SpawnedPty {
-    pub master: Box<dyn MasterPty + Send>,
-    pub writer: Box<dyn Write + Send>,
-    pub killer: Box<dyn ChildKiller + Send + Sync>,
+    pub transport: LocalTransport,
     pub output: mpsc::Receiver<Vec<u8>>,
+}
+
+/// A pty seen through the [`Transport`] interface.
+///
+/// Each handle sits behind its own lock so that a write which is blocked on a
+/// full pty buffer cannot also hold up a resize or a kill - the two things
+/// most likely to be needed *because* a write is stuck.
+pub struct LocalTransport {
+    master: Mutex<Box<dyn MasterPty + Send>>,
+    writer: Mutex<Box<dyn Write + Send>>,
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+}
+
+impl Transport for LocalTransport {
+    fn write(&self, data: &[u8]) -> AppResult<()> {
+        let mut writer = self.writer.lock();
+        writer.write_all(data)?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    fn resize(&self, cols: u16, rows: u16) -> AppResult<()> {
+        self.master
+            .lock()
+            .resize(PtySize {
+                rows: rows.max(1),
+                cols: cols.max(1),
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|err| AppError::internal(err.to_string()))
+    }
+
+    fn kill(&self) {
+        let _ = self.killer.lock().kill();
+    }
 }
 
 /// Spawns `opts.shell` on a new pty.
@@ -37,7 +73,7 @@ pub struct SpawnedPty {
 /// exit code when the platform reports one.
 pub fn spawn<F>(opts: SpawnOptions<'_>, on_exit: F) -> AppResult<SpawnedPty>
 where
-    F: FnOnce(Option<u32>) + Send + 'static,
+    F: FnOnce(ExitReason, Option<u32>) + Send + 'static,
 {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -121,15 +157,21 @@ where
     std::thread::Builder::new()
         .name("harbour-pty-wait".into())
         .spawn(move || {
-            let code = child.wait().ok().map(|status| status.exit_code());
-            on_exit(code);
+            // `wait` failing means we never learned how the child ended, not
+            // that it is still running: the pty is gone either way.
+            match child.wait() {
+                Ok(status) => on_exit(ExitReason::Exited, Some(status.exit_code())),
+                Err(_) => on_exit(ExitReason::Lost, None),
+            }
         })
         .map_err(AppError::Io)?;
 
     Ok(SpawnedPty {
-        master: pair.master,
-        writer,
-        killer,
+        transport: LocalTransport {
+            master: Mutex::new(pair.master),
+            writer: Mutex::new(writer),
+            killer: Mutex::new(killer),
+        },
         output,
     })
 }

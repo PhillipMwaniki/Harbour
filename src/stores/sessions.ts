@@ -1,8 +1,19 @@
 import { create } from "zustand";
 
-import type { SessionInfo, ShellSpec } from "@/ipc/types";
+import type { AuthChoice, SessionInfo, ShellSpec, SshTarget } from "@/ipc/types";
 
 export type TabStatus = "starting" | "live" | "closed";
+
+/**
+ * What a tab is for. The terminal component reads this to decide which command
+ * opens the session, so adding a transport (serial, telnet) is a variant here
+ * plus a branch there, and nothing else.
+ */
+export type SessionTarget =
+  | { kind: "local"; shellId?: string }
+  | { kind: "ssh"; target: SshTarget; methods: AuthChoice[] };
+
+export const LOCAL_DEFAULT: SessionTarget = { kind: "local" };
 
 /**
  * A tab exists before its backend session does.
@@ -16,8 +27,7 @@ export type TabStatus = "starting" | "live" | "closed";
  */
 export interface TerminalTab {
   tabId: string;
-  /** Undefined means "the default shell". */
-  shellId?: string;
+  target: SessionTarget;
   sessionId: string | null;
   title: string;
   status: TabStatus;
@@ -32,14 +42,17 @@ export interface SessionsState {
 
   setShells: (shells: ShellSpec[]) => void;
   /** Creates a tab and focuses it. Returns the new tab id. */
-  openTab: (shellId?: string) => string;
+  openTab: (target?: SessionTarget) => string;
   /** Binds a backend session to a tab once the pty is up. */
   attachSession: (tabId: string, info: SessionInfo) => void;
   /** The pty could not be started; the tab stays so the user can read why. */
   failTab: (tabId: string, error: string) => void;
   closeTab: (tabId: string) => void;
-  /** Marks the tab owning `sessionId` as exited. */
-  markSessionClosed: (sessionId: string, exitCode: number | null) => void;
+  /**
+   * Marks the tab owning `sessionId` as exited. `error` is set when the
+   * session did not end on purpose, so the tab can say why it is dead.
+   */
+  markSessionClosed: (sessionId: string, exitCode: number | null, error?: string) => void;
   setTitle: (tabId: string, title: string) => void;
   setActive: (tabId: string | null) => void;
 }
@@ -50,6 +63,19 @@ export function neighbourOf(tabs: TerminalTab[], tabId: string): string | null {
   if (index === -1) return null;
   const next = tabs[index + 1] ?? tabs[index - 1];
   return next ? next.tabId : null;
+}
+
+/**
+ * The name a tab carries while its session is still being opened. The backend
+ * sends the real one with `SessionInfo`, but an SSH handshake can sit on a
+ * password prompt for a while and an unlabelled tab is no help then.
+ */
+export function provisionalTitle(target: SessionTarget, shells: ShellSpec[]): string {
+  if (target.kind === "ssh") {
+    const { user, host, port } = target.target;
+    return port === 22 ? `${user}@${host}` : `${user}@${host}:${port}`;
+  }
+  return shells.find((shell) => shell.id === target.shellId)?.label ?? "Terminal";
 }
 
 let tabCounter = 0;
@@ -69,16 +95,16 @@ export const useSessions = create<SessionsState>((set) => ({
 
   setShells: (shells) => set({ shells }),
 
-  openTab: (shellId) => {
+  openTab: (target = LOCAL_DEFAULT) => {
     const tabId = nextTabId();
     set((state) => ({
       tabs: [
         ...state.tabs,
         {
           tabId,
-          shellId,
+          target,
           sessionId: null,
-          title: state.shells.find((s) => s.id === shellId)?.label ?? "Terminal",
+          title: provisionalTitle(target, state.shells),
           status: "starting" as const,
           exitCode: null,
           error: null,
@@ -112,10 +138,12 @@ export const useSessions = create<SessionsState>((set) => ({
         state.activeTabId === tabId ? neighbourOf(state.tabs, tabId) : state.activeTabId,
     })),
 
-  markSessionClosed: (sessionId, exitCode) =>
+  markSessionClosed: (sessionId, exitCode, error) =>
     set((state) => ({
       tabs: state.tabs.map((tab) =>
-        tab.sessionId === sessionId ? { ...tab, status: "closed" as const, exitCode } : tab,
+        tab.sessionId === sessionId
+          ? { ...tab, status: "closed" as const, exitCode, error: error ?? tab.error }
+          : tab,
       ),
     })),
 

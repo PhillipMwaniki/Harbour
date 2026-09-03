@@ -1,0 +1,618 @@
+//! Establishing an SSH connection and getting a shell on it.
+//!
+//! The shape of this module follows OpenSSH's: verify the host key, walk a
+//! list of authentication methods until one succeeds, then open one channel,
+//! ask for a pty on it, and start a shell. What is Harbour-specific is that
+//! every decision a human has to make is delegated to an [`Asker`] rather than
+//! read from a terminal, and that a refused host key is an error with a code
+//! the UI can act on.
+
+use std::borrow::Cow;
+use std::sync::Arc;
+use std::time::Duration;
+
+use parking_lot::Mutex;
+use russh::client::{AuthResult, Config, Handle, Handler, KeyboardInteractiveAuthResponse, Msg};
+use russh::keys::agent::AgentIdentity;
+use russh::keys::ssh_key::Algorithm;
+use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
+use russh::{Channel, ChannelMsg, MethodKind, MethodSet, SshId};
+use tokio::sync::mpsc;
+
+use crate::error::{AppError, AppResult};
+use crate::session::ExitReason;
+use crate::ssh::known_hosts::{fingerprint, KnownHosts, Verdict};
+use crate::ssh::transport::{self, SshTransport};
+use crate::ssh::{
+    agent, Asker, AuthChoice, HostKeyQuestion, HostKeyStatus, SecretKind, SecretQuestion, SshTarget,
+};
+
+/// The terminal type advertised to the remote. It is what xterm.js implements,
+/// and what the local pty path already claims.
+const TERM: &str = "xterm-256color";
+
+/// Sent if the connection goes quiet, so a dropped link is noticed in seconds
+/// rather than whenever the user next types. Three unanswered probes end it.
+const KEEPALIVE: Duration = Duration::from_secs(30);
+
+pub struct ConnectRequest {
+    pub target: SshTarget,
+    /// Authentication methods to try, in order.
+    pub methods: Vec<AuthChoice>,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// A connected, authenticated session with a live shell on it.
+#[derive(Debug)]
+pub struct Connected {
+    pub transport: SshTransport,
+    pub output: mpsc::Receiver<Vec<u8>>,
+    /// `SHA256:...` of the host key that was accepted.
+    pub fingerprint: String,
+    /// Which method authenticated, for the log and the UI.
+    pub method: &'static str,
+}
+
+/// Connects, authenticates, and starts a remote shell.
+///
+/// `on_exit` fires when the shell ends or the connection drops, mirroring the
+/// local pty path so the session manager treats both the same way.
+pub async fn connect<A, F>(
+    request: ConnectRequest,
+    asker: Arc<A>,
+    known_hosts: Arc<KnownHosts>,
+    on_exit: F,
+) -> AppResult<Connected>
+where
+    A: Asker,
+    F: FnOnce(ExitReason, Option<u32>) + Send + 'static,
+{
+    let target = request.target;
+    let accepted = Arc::new(Mutex::new(None));
+
+    let handler = ClientHandler {
+        host: target.host.clone(),
+        port: target.port,
+        known_hosts,
+        asker: Arc::clone(&asker),
+        accepted: Arc::clone(&accepted),
+    };
+
+    // The TCP connection is made here rather than through `russh::client::connect`
+    // so that "no route to host" stays distinguishable from an SSH-level
+    // failure; the two need very different messages.
+    let stream = tokio::net::TcpStream::connect((target.host.as_str(), target.port))
+        .await
+        .map_err(|err| AppError::SshConnect {
+            host: target.host.clone(),
+            port: target.port,
+            reason: err.to_string(),
+        })?;
+    // Terminal input is latency-sensitive and tiny: Nagle would coalesce
+    // keystrokes into visible lag.
+    let _ = stream.set_nodelay(true);
+
+    let mut session = russh::client::connect_stream(Arc::new(config()), stream, handler).await?;
+
+    let method = authenticate(&mut session, &target, &request.methods, asker.as_ref()).await?;
+
+    let mut channel = session
+        .channel_open_session()
+        .await
+        .map_err(|err| AppError::SshChannel(err.to_string()))?;
+
+    channel
+        .request_pty(
+            true,
+            TERM,
+            request.cols.max(1) as u32,
+            request.rows.max(1) as u32,
+            0,
+            0,
+            &[],
+        )
+        .await
+        .map_err(|err| AppError::SshChannel(err.to_string()))?;
+    let mut pending = wait_for_reply(&mut channel, "pty").await?;
+
+    channel
+        .request_shell(true)
+        .await
+        .map_err(|err| AppError::SshChannel(err.to_string()))?;
+    pending.extend(wait_for_reply(&mut channel, "shell").await?);
+
+    let running = transport::start(session, channel, pending, on_exit);
+
+    let fingerprint = accepted
+        .lock()
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    tracing::info!(host = %target.host, port = target.port, method, "ssh session established");
+
+    Ok(Connected {
+        transport: running.transport,
+        output: running.output,
+        fingerprint,
+        method,
+    })
+}
+
+fn config() -> Config {
+    Config {
+        client_id: SshId::Standard(Cow::Borrowed(concat!(
+            "SSH-2.0-Harbour_",
+            env!("CARGO_PKG_VERSION")
+        ))),
+        keepalive_interval: Some(KEEPALIVE),
+        keepalive_max: 3,
+        nodelay: true,
+        ..Config::default()
+    }
+}
+
+/// Waits for the reply to a channel request, keeping any output that arrives
+/// alongside it.
+///
+/// A server may start writing before we have read its `SUCCESS`, and the first
+/// thing it writes is the shell's opening prompt. Dropping it on the floor
+/// would leave the user looking at a blank terminal - the same class of bug as
+/// the milestone 1 pty sizing fix - so it is buffered and replayed instead.
+async fn wait_for_reply(channel: &mut Channel<Msg>, what: &str) -> AppResult<Vec<u8>> {
+    let mut buffered = Vec::new();
+    while let Some(message) = channel.wait().await {
+        match message {
+            ChannelMsg::Success => return Ok(buffered),
+            ChannelMsg::Failure => {
+                return Err(AppError::SshChannel(format!(
+                    "the server refused the {what} request"
+                )))
+            }
+            ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                buffered.extend_from_slice(&data)
+            }
+            ChannelMsg::Eof | ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+    Err(AppError::SshChannel(format!(
+        "the channel closed while waiting for the {what} reply"
+    )))
+}
+
+/// What one authentication attempt came to.
+enum Outcome {
+    Success,
+    /// Rejected; the server says these methods are still open.
+    Failure(MethodSet),
+    /// The user dismissed a prompt. Not a failure - stop, quietly.
+    Cancelled,
+}
+
+/// Tries each method in turn, skipping any the server will not entertain.
+async fn authenticate<A: Asker>(
+    session: &mut Handle<ClientHandler<A>>,
+    target: &SshTarget,
+    methods: &[AuthChoice],
+    asker: &A,
+) -> AppResult<&'static str> {
+    // `none` is both a real method - some hosts accept it - and the standard
+    // way to find out what else the server will take.
+    let mut remaining = match session.authenticate_none(&target.user).await? {
+        AuthResult::Success => return Ok("none"),
+        AuthResult::Failure {
+            remaining_methods, ..
+        } => remaining_methods,
+    };
+
+    let mut tried: Vec<&'static str> = Vec::new();
+    let mut refused: Vec<&'static str> = Vec::new();
+
+    for choice in methods {
+        if !remaining.contains(&method_kind(choice)) {
+            refused.push(choice.describe());
+            continue;
+        }
+        tried.push(choice.describe());
+
+        let outcome = match choice {
+            AuthChoice::Agent => authenticate_with_agent(session, target).await?,
+            AuthChoice::Key { path } => authenticate_with_key(session, target, path, asker).await?,
+            AuthChoice::Password => authenticate_with_password(session, target, asker).await?,
+            AuthChoice::KeyboardInteractive => {
+                authenticate_interactively(session, target, asker).await?
+            }
+        };
+
+        match outcome {
+            Outcome::Success => return Ok(choice.describe()),
+            Outcome::Failure(still_open) => remaining = still_open,
+            Outcome::Cancelled => {
+                return Err(AppError::SshAuth {
+                    host: target.host.clone(),
+                    user: target.user.clone(),
+                    reason: "cancelled".into(),
+                })
+            }
+        }
+    }
+
+    Err(AppError::SshAuth {
+        host: target.host.clone(),
+        user: target.user.clone(),
+        reason: describe_failure(&tried, &refused, &remaining),
+    })
+}
+
+fn method_kind(choice: &AuthChoice) -> MethodKind {
+    match choice {
+        AuthChoice::Agent | AuthChoice::Key { .. } => MethodKind::PublicKey,
+        AuthChoice::Password => MethodKind::Password,
+        AuthChoice::KeyboardInteractive => MethodKind::KeyboardInteractive,
+    }
+}
+
+/// The message a user gets when nothing worked. "Authentication failed" alone
+/// is useless when the real problem is that the server never offered the
+/// method they configured.
+fn describe_failure(tried: &[&str], refused: &[&str], remaining: &MethodSet) -> String {
+    let mut parts = Vec::new();
+    if !tried.is_empty() {
+        parts.push(format!("tried {}", tried.join(", ")));
+    }
+    if !refused.is_empty() {
+        parts.push(format!("{} not offered by the server", refused.join(", ")));
+    }
+    if !remaining.is_empty() {
+        let offered: Vec<&str> = remaining.iter().map(Into::into).collect();
+        parts.push(format!("server accepts {}", offered.join(", ")));
+    }
+    if parts.is_empty() {
+        "no authentication method was available".into()
+    } else {
+        parts.join("; ")
+    }
+}
+
+/// Offers every identity the agent holds, the way `ssh -A` would.
+async fn authenticate_with_agent<A: Asker>(
+    session: &mut Handle<ClientHandler<A>>,
+    target: &SshTarget,
+) -> AppResult<Outcome> {
+    let mut agent = agent::connect().await?;
+    let identities = agent
+        .request_identities()
+        .await
+        .map_err(|err| AppError::SshAgent(err.to_string()))?;
+
+    if identities.is_empty() {
+        return Err(AppError::SshAgent("the agent holds no identities".into()));
+    }
+
+    let rsa_hash = session.best_supported_rsa_hash().await?.flatten();
+    let mut last = MethodSet::empty();
+
+    for identity in identities {
+        // Certificates need the CA plumbing that milestone 9 adds; a keyring
+        // holding both should still get to try its plain keys.
+        let AgentIdentity::PublicKey { key, comment } = identity else {
+            continue;
+        };
+        let hash_alg = rsa_hash_for(&key.algorithm(), rsa_hash);
+
+        match session
+            .authenticate_publickey_with(&target.user, key, hash_alg, &mut agent)
+            .await
+            .map_err(|err| AppError::SshAgent(err.to_string()))?
+        {
+            AuthResult::Success => {
+                tracing::debug!(identity = %comment, "agent identity accepted");
+                return Ok(Outcome::Success);
+            }
+            AuthResult::Failure {
+                remaining_methods, ..
+            } => last = remaining_methods,
+        }
+    }
+
+    Ok(Outcome::Failure(last))
+}
+
+/// Loads a key file, asking for the passphrase only if the file turns out to
+/// need one.
+async fn authenticate_with_key<A: Asker>(
+    session: &mut Handle<ClientHandler<A>>,
+    target: &SshTarget,
+    path: &str,
+    asker: &A,
+) -> AppResult<Outcome> {
+    let key = match load_secret_key(path, None) {
+        Ok(key) => key,
+        Err(russh::keys::Error::KeyIsEncrypted) => {
+            let answer = asker
+                .secret(SecretQuestion {
+                    host: target.host.clone(),
+                    user: target.user.clone(),
+                    kind: SecretKind::Passphrase,
+                    label: format!("Passphrase for {path}"),
+                    instruction: String::new(),
+                    echo: false,
+                })
+                .await?;
+            let Some(passphrase) = answer.secret else {
+                return Ok(Outcome::Cancelled);
+            };
+            load_secret_key(path, Some(&passphrase)).map_err(|err| AppError::SshKeyLoad {
+                path: path.to_string(),
+                reason: err.to_string(),
+            })?
+        }
+        Err(err) => {
+            return Err(AppError::SshKeyLoad {
+                path: path.to_string(),
+                reason: err.to_string(),
+            })
+        }
+    };
+
+    let rsa_hash = session.best_supported_rsa_hash().await?.flatten();
+    let hash_alg = rsa_hash_for(&key.algorithm(), rsa_hash);
+    let key = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
+
+    Ok(
+        match session.authenticate_publickey(&target.user, key).await? {
+            AuthResult::Success => Outcome::Success,
+            AuthResult::Failure {
+                remaining_methods, ..
+            } => Outcome::Failure(remaining_methods),
+        },
+    )
+}
+
+async fn authenticate_with_password<A: Asker>(
+    session: &mut Handle<ClientHandler<A>>,
+    target: &SshTarget,
+    asker: &A,
+) -> AppResult<Outcome> {
+    let answer = asker
+        .secret(SecretQuestion {
+            host: target.host.clone(),
+            user: target.user.clone(),
+            kind: SecretKind::Password,
+            label: format!("Password for {}", target.label()),
+            instruction: String::new(),
+            echo: false,
+        })
+        .await?;
+    let Some(password) = answer.secret else {
+        return Ok(Outcome::Cancelled);
+    };
+
+    Ok(
+        match session
+            .authenticate_password(&target.user, password)
+            .await?
+        {
+            AuthResult::Success => Outcome::Success,
+            AuthResult::Failure {
+                remaining_methods, ..
+            } => Outcome::Failure(remaining_methods),
+        },
+    )
+}
+
+/// `keyboard-interactive`, where the server words the questions. This is how
+/// password login is actually implemented on a good many hosts, and it is the
+/// only route for one-time-code prompts.
+async fn authenticate_interactively<A: Asker>(
+    session: &mut Handle<ClientHandler<A>>,
+    target: &SshTarget,
+    asker: &A,
+) -> AppResult<Outcome> {
+    let mut response = session
+        .authenticate_keyboard_interactive_start(&target.user, None)
+        .await?;
+
+    loop {
+        match response {
+            KeyboardInteractiveAuthResponse::Success => return Ok(Outcome::Success),
+            KeyboardInteractiveAuthResponse::Failure {
+                remaining_methods, ..
+            } => return Ok(Outcome::Failure(remaining_methods)),
+            KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                let instruction = [name.trim(), instructions.trim()]
+                    .iter()
+                    .filter(|part| !part.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let mut answers = Vec::with_capacity(prompts.len());
+                for prompt in prompts {
+                    let answer = asker
+                        .secret(SecretQuestion {
+                            host: target.host.clone(),
+                            user: target.user.clone(),
+                            kind: SecretKind::Challenge,
+                            label: prompt.prompt.trim().to_string(),
+                            instruction: instruction.clone(),
+                            echo: prompt.echo,
+                        })
+                        .await?;
+                    let Some(secret) = answer.secret else {
+                        return Ok(Outcome::Cancelled);
+                    };
+                    answers.push(secret);
+                }
+
+                response = session
+                    .authenticate_keyboard_interactive_respond(answers)
+                    .await?;
+            }
+        }
+    }
+}
+
+/// RSA signatures need an explicit hash: `ssh-rsa` with SHA-1 is rejected by
+/// modern servers, so the best hash the server named is used instead. Every
+/// other algorithm carries its hash in the algorithm name.
+fn rsa_hash_for(
+    algorithm: &Algorithm,
+    best: Option<russh::keys::HashAlg>,
+) -> Option<russh::keys::HashAlg> {
+    match algorithm {
+        Algorithm::Rsa { .. } => best,
+        _ => None,
+    }
+}
+
+/// The connection-side half of the host key policy in `docs/security.md`.
+struct ClientHandler<A: Asker> {
+    host: String,
+    port: u16,
+    known_hosts: Arc<KnownHosts>,
+    asker: Arc<A>,
+    /// Fingerprint of whatever key was accepted, read back after connecting.
+    accepted: Arc<Mutex<Option<String>>>,
+}
+
+impl<A: Asker> Handler for ClientHandler<A> {
+    type Error = AppError;
+
+    async fn check_server_key(&mut self, offered: &PublicKeyOrCertificate) -> AppResult<bool> {
+        let PublicKeyOrCertificate::PublicKey { key, .. } = offered else {
+            return Err(AppError::SshHostKeyRejected {
+                host: self.host.clone(),
+                reason:
+                    "the server presented a host certificate, which Harbour cannot validate yet"
+                        .into(),
+            });
+        };
+
+        let print = fingerprint(key);
+        let (status, stored) = match self.known_hosts.verify(&self.host, self.port, key) {
+            Verdict::Trusted => {
+                *self.accepted.lock() = Some(print);
+                return Ok(true);
+            }
+            Verdict::Revoked => {
+                return Err(AppError::SshHostKeyRejected {
+                    host: self.host.clone(),
+                    reason: "this key is marked @revoked in known_hosts".into(),
+                })
+            }
+            Verdict::Unknown { other } => (HostKeyStatus::Unknown, other),
+            Verdict::Changed { stored } => (HostKeyStatus::Changed, stored),
+        };
+
+        let answer = self
+            .asker
+            .host_key(HostKeyQuestion {
+                host: self.host.clone(),
+                port: self.port,
+                status,
+                algorithm: key.algorithm().to_string(),
+                fingerprint: print.clone(),
+                stored,
+            })
+            .await?;
+
+        if !answer.accept {
+            return Err(AppError::SshHostKeyRejected {
+                host: self.host.clone(),
+                reason: match status {
+                    HostKeyStatus::Changed => {
+                        "the offered key did not match the one on file".into()
+                    }
+                    HostKeyStatus::Unknown => "the key was not trusted".into(),
+                },
+            });
+        }
+
+        if answer.remember {
+            // Failing to record the key is not a reason to refuse a connection
+            // the user just approved; they will simply be asked again.
+            if let Err(err) = self.known_hosts.learn(&self.host, self.port, key) {
+                tracing::warn!(error = %err, path = %self.known_hosts.write_path().display(), "could not record the host key");
+            }
+        }
+
+        *self.accepted.lock() = Some(print);
+        Ok(true)
+    }
+
+    /// Servers use the banner for legal notices and MOTDs. It belongs on the
+    /// terminal eventually; for now it is logged, never discarded silently.
+    async fn auth_banner(
+        &mut self,
+        banner: &str,
+        _session: &mut russh::client::Session,
+    ) -> AppResult<()> {
+        tracing::info!(host = %self.host, banner = %banner.trim(), "server banner");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn methods(kinds: &[MethodKind]) -> MethodSet {
+        let mut set = MethodSet::empty();
+        for kind in kinds {
+            set.push(*kind);
+        }
+        set
+    }
+
+    #[test]
+    fn every_choice_maps_to_the_method_the_server_names() {
+        assert_eq!(method_kind(&AuthChoice::Agent), MethodKind::PublicKey);
+        assert_eq!(
+            method_kind(&AuthChoice::Key {
+                path: "id_ed25519".into()
+            }),
+            MethodKind::PublicKey
+        );
+        assert_eq!(method_kind(&AuthChoice::Password), MethodKind::Password);
+        assert_eq!(
+            method_kind(&AuthChoice::KeyboardInteractive),
+            MethodKind::KeyboardInteractive
+        );
+    }
+
+    /// The common confusion is a host with `PasswordAuthentication no`. Saying
+    /// so is the difference between a two-second fix and a lost afternoon.
+    #[test]
+    fn a_method_the_server_never_offered_is_named_as_such() {
+        let message = describe_failure(
+            &["publickey"],
+            &["password"],
+            &methods(&[MethodKind::PublicKey]),
+        );
+        assert!(message.contains("tried publickey"));
+        assert!(message.contains("password not offered"));
+        assert!(message.contains("server accepts publickey"));
+    }
+
+    #[test]
+    fn exhausting_every_method_still_says_something_useful() {
+        let message = describe_failure(&[], &[], &MethodSet::empty());
+        assert_eq!(message, "no authentication method was available");
+    }
+
+    #[test]
+    fn only_rsa_keys_are_given_an_explicit_hash() {
+        let best = Some(russh::keys::HashAlg::Sha512);
+        assert_eq!(
+            rsa_hash_for(&Algorithm::Rsa { hash: None }, best),
+            Some(russh::keys::HashAlg::Sha512)
+        );
+        assert_eq!(rsa_hash_for(&Algorithm::Ed25519, best), None);
+    }
+}

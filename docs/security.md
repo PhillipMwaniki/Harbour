@@ -56,9 +56,43 @@ Bracketed paste is used where the remote supports it.
 `cargo audit` and `pnpm audit` run in CI. Dependencies are pinned in lockfiles,
 which are committed.
 
+One advisory is ignored, in `src-tauri/.cargo/audit.toml`, and it must stay the
+only one: **RUSTSEC-2023-0071**, the Marvin attack against the `rsa` crate. RSA
+operations there are not constant-time, and no patched version exists. It is
+accepted rather than fixed because the alternative is dropping RSA, which means
+refusing hosts that present an `ssh-rsa` host key or expect an RSA user key -
+still a large share of the machines this tool exists to reach. In Harbour an
+RSA private key signs one authentication challenge per connection, to a server
+the user chose; Ed25519 and ECDSA are unaffected and are what key generation
+will default to in milestone 3. The ignore carries this reasoning inline, and
+any future entry must do the same.
+
 ## Current state
 
-Milestone 1 has no credential handling at all - local shells only. Nothing on
-this page is implemented yet beyond the capability allowlist, the CSP and the
-logging discipline. The rules exist first so the code that lands in milestones
-2 and 3 has something to conform to.
+Milestone 2 implements the host key rules and the credential handling that goes
+with connecting; the vault rules still describe milestone 3.
+
+Implemented:
+
+- Host keys, in full. `~/.ssh/known_hosts` and `known_hosts2` are read -
+  including hashed entries, wildcards, negations and `@revoked` - and Harbour
+  appends only to its own file under the app config directory. An unknown key
+  prompts with the SHA-256 fingerprint and offers to remember it; a changed key
+  leads with the warning, shows both fingerprints and their source line, and
+  focuses Reject. There is no "always accept".
+- Credentials. A password or passphrase is typed into a dialog, sent once to
+  the attempt that asked for it, and dropped. It is never stored, never logged,
+  and never sent back to the webview. Cancelling is distinct from an empty
+  answer: it stops the attempt rather than spending a try.
+- `@cert-authority` lines are parsed and ignored rather than mistaken for host
+  keys, and a server offering a host *certificate* is refused outright rather
+  than trusted unverified.
+
+Not yet:
+
+- The vault, the keyring, the master password and encrypted export - all
+  milestone 3. Nothing is persisted between connections today except a host key
+  the user chose to remember.
+- Agent forwarding is not implemented at all, which is the safe default.
+- Session logging does not exist, so the no-echo masking rule has nothing to
+  apply to yet.
