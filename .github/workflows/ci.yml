@@ -19,9 +19,9 @@ jobs:
     name: Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -38,7 +38,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-22.04]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
@@ -63,8 +63,8 @@ jobs:
 
       # tauri::generate_context! validates frontendDist at compile time, so the
       # bundle has to exist before anything Rust is built.
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -92,7 +92,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-22.04]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
@@ -111,8 +111,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -120,7 +120,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm tauri build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: harbour-${{ matrix.os }}
           path: |
@@ -129,20 +129,91 @@ jobs:
             src-tauri/target/release/bundle/**/*.dmg
             src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.rpm
           if-no-files-found: warn
+
+  # Ubuntu builds the Linux installers; these prove they land on the
+  # distributions people actually run, with dependencies that resolve.
+  linux-install:
+    name: Install on ${{ matrix.name }}
+    needs: bundle
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Fedora (rpm)
+            image: fedora:latest
+            install: dnf install -y ./**/*.rpm
+          - name: Debian (deb)
+            image: debian:bookworm
+            install: apt-get update && apt-get install -y ./**/*.deb
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: harbour-ubuntu-22.04
+          path: bundles
+
+      - name: Install the package
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          shopt -s globstar
+          cd bundles
+          ls -R
+          ${{ matrix.install }}
+          test -x /usr/bin/harbour
+          ls -l /usr/share/applications/ /usr/share/icons/hicolor/*/apps/ 2>/dev/null | grep -i harbour || true
+
+  # The from-source PKGBUILD, built exactly as `makepkg` on an Arch machine
+  # would build it, from this checkout. A release never ships a PKGBUILD that
+  # does not build.
+  arch:
+    name: Arch package (from source)
+    needs: [frontend, rust]
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install the build and runtime dependencies
+        run: pacman -Syu --noconfirm git cargo nodejs pnpm webkit2gtk-4.1 gtk3 librsvg openssl
+
+      - uses: actions/checkout@v7
+
+      - name: Build the PKGBUILD from this checkout
+        run: |
+          version=$(node -p "require('./package.json').version")
+          useradd -m builder
+          cp -r packaging/aur/harbour /home/builder/pkg
+          # The PKGBUILD downloads the tagged tarball by name; a tarball of
+          # this checkout under that name is used instead of a download.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git archive --format=tar.gz --prefix="Harbour-${version}/" \
+            -o "/home/builder/pkg/harbour-${version}.tar.gz" HEAD
+          sed -i "s/^pkgver=.*/pkgver=${version}/" /home/builder/pkg/PKGBUILD
+          chown -R builder /home/builder/pkg
+          su builder -c "cd /home/builder/pkg && makepkg --noconfirm --skipchecksums"
+
+      - name: Install it
+        run: |
+          pacman -U --noconfirm /home/builder/pkg/harbour-*.pkg.tar.zst
+          pacman -Q harbour
+          test -x /usr/bin/harbour
+          test -f /usr/share/applications/harbour.desktop
 
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-audit
       - name: cargo audit
         working-directory: src-tauri
         run: cargo audit
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
