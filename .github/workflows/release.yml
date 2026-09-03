@@ -169,6 +169,18 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # Signed updater artifacts (.sig files and latest.json) are produced only
+      # for releases, so CI can build without the signing secret. This turns
+      # them on just for this build; the signing itself needs the secrets in
+      # the tauri-action env below.
+      - name: Enable updater artifacts
+        shell: bash
+        run: >
+          node -e "const f='src-tauri/tauri.conf.json';
+          const c=require('./'+f);
+          c.bundle.createUpdaterArtifacts=true;
+          require('fs').writeFileSync(f, JSON.stringify(c,null,2)+String.fromCharCode(10));"
+
       # Builds the app and its installers, creates the draft release on the
       # first platform to finish, and attaches each platform's bundles to it.
       - uses: tauri-apps/tauri-action@v0
@@ -184,6 +196,7 @@ jobs:
           releaseName: Harbour ${{ needs.verify.outputs.version }}
           releaseBody: ${{ needs.verify.outputs.notes }}
           releaseDraft: true
+          includeUpdaterJson: true
           prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
           args: ${{ matrix.args }}
 
