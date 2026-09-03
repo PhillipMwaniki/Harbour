@@ -17,7 +17,7 @@ provides=("${_pkgname}=${pkgver}")
 conflicts=("${_pkgname}")
 options=('!strip')
 # The asset the release pipeline actually produced; rewritten at publish time.
-_debfile="harbour_${pkgver}_amd64.deb"
+_debfile="Harbour_${pkgver}_amd64.deb"
 source=(
   "${_debfile}::${url}/releases/download/v${pkgver}/${_debfile}"
   "LICENSE-${pkgver}::${url}/raw/v${pkgver}/LICENSE"
