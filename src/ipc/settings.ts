@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { LogFormat, LogStatus, SchemeImport, Settings } from "./types";
+import type { HighlightImport, LogFormat, LogStatus, SchemeImport, Settings } from "./types";
 
 /** The settings as the backend last read them. */
 export function settingsLoad(): Promise<Settings> {
@@ -37,6 +37,14 @@ export function settingsPaths(): Promise<SettingsPaths> {
  */
 export function themeImport(path: string): Promise<SchemeImport> {
   return invoke<SchemeImport>("theme_import", { path });
+}
+
+/**
+ * Reads Xshell highlight sets - a `.hls` file, a directory of them, or the
+ * ones inside a `.xts` backup - as highlight rules. Writes nothing.
+ */
+export function highlightImport(path: string): Promise<HighlightImport> {
+  return invoke<HighlightImport>("highlight_import", { path });
 }
 
 // ---------------------------------------------------------------------------

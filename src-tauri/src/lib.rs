@@ -119,6 +119,7 @@ pub fn run() {
             commands::settings::settings_reload,
             commands::settings::settings_paths,
             commands::settings::theme_import,
+            commands::settings::highlight_import,
         ])
         .on_window_event(|window, event| {
             // Killing children on window close keeps orphan shells from

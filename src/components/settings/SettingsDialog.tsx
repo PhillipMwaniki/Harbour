@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { logFileName, themeImport } from "@/ipc/settings";
+import { highlightImport, logFileName, themeImport } from "@/ipc/settings";
 import { errorMessage, type HighlightRule, type LogFormat, type ThemeSpec } from "@/ipc/types";
 import { compileRules, newRuleId } from "@/lib/highlight";
 import {
@@ -610,7 +610,138 @@ function Highlights() {
       >
         Add a rule
       </button>
+
+      <HighlightImporter />
     </div>
+  );
+}
+
+/**
+ * Importing Xshell highlight sets. Same shape as the scheme importer: show
+ * everything the file held, keep only what is ticked.
+ */
+function HighlightImporter() {
+  const update = useSettings((state) => state.update);
+  const [path, setPath] = useState("");
+  const [found, setFound] = useState<HighlightRule[] | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const preview = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await highlightImport(path.trim());
+      setFound(result.rules);
+      setNotes(result.notes);
+      setChosen(new Set(result.rules.map((rule) => rule.id)));
+    } catch (err) {
+      setError(errorMessage(err));
+      setFound(null);
+      setNotes([]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selected = (found ?? []).filter((rule) => chosen.has(rule.id));
+
+  return (
+    <section className="mt-6">
+      <h3 className="mb-2 font-medium">Import from Xshell</h3>
+      <p className="mb-2 text-[var(--hb-fg-muted)]">
+        A highlight set (<code>.hls</code>), a folder of them, or a <code>.xts</code> backup.
+      </p>
+      <div className="flex gap-2">
+        <input
+          aria-label="Highlight set path"
+          className={inputClass}
+          value={path}
+          placeholder="~/Desktop/xbackup.xts"
+          onChange={(event) => setPath(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && path.trim() !== "") void preview();
+          }}
+        />
+        <button
+          type="button"
+          disabled={busy || path.trim() === ""}
+          onClick={() => void preview()}
+          className="shrink-0 rounded border border-[var(--hb-border)] px-3 py-1 hover:bg-[var(--hb-hover)] disabled:opacity-50"
+        >
+          {busy ? "Reading…" : "Preview"}
+        </button>
+      </div>
+
+      {error && (
+        <p role="alert" className="mt-2 text-[var(--hb-danger)]">
+          {error}
+        </p>
+      )}
+
+      {found && (
+        <div className="mt-2">
+          <ul className="max-h-40 overflow-y-auto rounded border border-[var(--hb-border)]">
+            {found.length === 0 && (
+              <li className="px-2 py-1 text-[var(--hb-fg-muted)]">Nothing to import.</li>
+            )}
+            {found.map((rule) => (
+              <li key={rule.id} className="flex items-center gap-2 px-2 py-1">
+                <input
+                  type="checkbox"
+                  aria-label={rule.label}
+                  checked={chosen.has(rule.id)}
+                  onChange={(event) =>
+                    setChosen((current) => {
+                      const next = new Set(current);
+                      if (event.target.checked) next.add(rule.id);
+                      else next.delete(rule.id);
+                      return next;
+                    })
+                  }
+                />
+                <span
+                  className="rounded px-1.5 font-mono"
+                  style={{
+                    color: rule.foreground ?? undefined,
+                    backgroundColor: rule.background ?? undefined,
+                  }}
+                >
+                  {rule.label}
+                </span>
+                <span className="ml-auto truncate font-mono text-[var(--hb-fg-muted)]">
+                  {rule.pattern}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          {notes.map((note) => (
+            <p key={note} className="mt-1 text-[var(--hb-fg-muted)]">
+              {note}
+            </p>
+          ))}
+
+          <button
+            type="button"
+            disabled={selected.length === 0}
+            onClick={() => {
+              void update((current) => ({
+                ...current,
+                highlights: [...current.highlights, ...selected],
+              }));
+              setFound(null);
+              setNotes([]);
+            }}
+            className="mt-2 rounded bg-[var(--hb-accent)] px-3 py-1 text-[var(--hb-bg)] disabled:opacity-50"
+          >
+            Add {selected.length} rule{selected.length === 1 ? "" : "s"}
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -73,6 +73,9 @@ pub enum AppError {
     #[error("could not import a colour scheme from {path}: {reason}")]
     SchemeImport { path: String, reason: String },
 
+    #[error("could not import highlight rules from {path}: {reason}")]
+    HighlightImport { path: String, reason: String },
+
     #[error("session logging failed: {0}")]
     LogFailed(String),
 
@@ -111,6 +114,7 @@ impl AppError {
             AppError::Keyring(_) => "KEYRING_UNAVAILABLE",
             AppError::Settings(_) => "SETTINGS_ERROR",
             AppError::SchemeImport { .. } => "SCHEME_IMPORT_FAILED",
+            AppError::HighlightImport { .. } => "HIGHLIGHT_IMPORT_FAILED",
             AppError::LogFailed(_) => "LOG_FAILED",
             AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
             AppError::PromptTimedOut => "PROMPT_TIMED_OUT",

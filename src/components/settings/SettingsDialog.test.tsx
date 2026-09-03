@@ -9,6 +9,7 @@ const settingsLoad = vi.fn();
 const settingsSave = vi.fn();
 const settingsPaths = vi.fn();
 const themeImport = vi.fn();
+const highlightImport = vi.fn();
 
 vi.mock("@/ipc/settings", async () => {
   const actual = await vi.importActual<typeof import("@/ipc/settings")>("@/ipc/settings");
@@ -18,6 +19,7 @@ vi.mock("@/ipc/settings", async () => {
     settingsSave: (settings: Settings) => settingsSave(settings),
     settingsPaths: () => settingsPaths(),
     themeImport: (path: string) => themeImport(path),
+    highlightImport: (path: string) => highlightImport(path),
   };
 });
 
@@ -202,6 +204,48 @@ describe("highlights", () => {
     await user.click(screen.getByRole("button", { name: "Delete Errors" }));
 
     expect(saved().highlights).toEqual([]);
+  });
+
+  it("previews an Xshell highlight set and keeps only what is ticked", async () => {
+    highlightImport.mockResolvedValue({
+      source: "/tmp/backup.xts",
+      rules: [
+        {
+          id: "phone",
+          label: "Phone number",
+          pattern: "[0-9]{3}-[0-9]{4}",
+          caseSensitive: false,
+          foreground: "#ffe400",
+          background: null,
+          enabled: true,
+        },
+        {
+          id: "space",
+          label: "Space",
+          pattern: "[ ]",
+          caseSensitive: false,
+          foreground: "#ffe400",
+          background: null,
+          enabled: false,
+        },
+      ],
+      notes: ["Sample: rule 3 has no keyword"],
+    });
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Highlights" }));
+
+    await user.type(screen.getByLabelText("Highlight set path"), "/tmp/backup.xts");
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+
+    expect(await screen.findByText("Phone number")).toBeInTheDocument();
+    expect(screen.getByText(/rule 3 has no keyword/)).toBeInTheDocument();
+    // Nothing is saved until Add is pressed.
+    expect(saved().highlights).toEqual([]);
+
+    await user.click(screen.getByRole("checkbox", { name: "Space" }));
+    await user.click(screen.getByRole("button", { name: "Add 1 rule" }));
+
+    expect(saved().highlights.map((rule) => rule.id)).toEqual(["phone"]);
   });
 });
 

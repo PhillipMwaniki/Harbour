@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::settings::highlight::{self, HighlightImport};
 use crate::settings::scheme::{self, SchemeImport};
 use crate::settings::Settings;
 use crate::AppState;
@@ -68,6 +69,14 @@ pub async fn settings_paths(state: State<'_, AppState>) -> AppResult<SettingsPat
 pub async fn theme_import(path: String) -> AppResult<SchemeImport> {
     let path = PathBuf::from(shellexpand(&path));
     blocking(move || scheme::import(&path)).await
+}
+
+/// Reads Xshell highlight sets - a `.hls`, a directory of them, or the ones
+/// inside a `.xts` backup - as highlight rules. Writes nothing.
+#[tauri::command]
+pub async fn highlight_import(path: String) -> AppResult<HighlightImport> {
+    let path = PathBuf::from(shellexpand(&path));
+    blocking(move || highlight::import(&path)).await
 }
 
 /// Expands a leading `~`, which people type and no filesystem understands.
