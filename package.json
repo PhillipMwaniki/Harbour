@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Cross-platform SSH client, terminal and SFTP file manager in one window",
   "license": "MIT",
+  "packageManager": "pnpm@10.20.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
