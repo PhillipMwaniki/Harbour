@@ -82,6 +82,15 @@ the user chose; Ed25519 and ECDSA are unaffected and are what key generation
 will default to when key generation lands. The ignore carries this reasoning
 inline, and any future entry must do the same.
 
+## Updating
+
+Harbour signs and verifies its updates. Each release's `latest.json` is signed
+in CI with a private key held only in the runner's secrets, and the app
+verifies every update against the matching public key baked into the binary
+before applying it - a tampered or unsigned update is refused by the updater
+plugin, not trusted. The update is offered, never forced, and the app never
+relaunches itself while sessions are live.
+
 ## Current state
 
 Milestone 4 adds session logging and a settings file. The master-password and

@@ -7,17 +7,47 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Added
 
-- Linux beyond Ubuntu. The `.rpm` now names its dependencies, CI installs the
+- **Milestone 7: jump hosts, port forwarding, snippets, follow-cwd.** A saved
+  host can sit behind a bastion - the Jump host field points at another saved
+  host to tunnel through, and that host can have a jump of its own, so a chain
+  is as deep as the estate needs. Each hop verifies its own host key and
+  authenticates with its own credentials, as `ssh -J` does, and closing the
+  terminal closes the whole chain.
+- Local port forwarding (Ctrl+Shift+P): a local port carried to a host the
+  remote can reach, over the connection a terminal already has, with no second
+  login. The bind fails loudly if the port is taken, the remote host resolves
+  on the far side, and a forward exposed on the network is an explicit,
+  warned-about opt-in.
+- A snippet palette (Ctrl+Shift+I): saved commands, filtered as you type and
+  inserted into the focused terminal. Managed in Settings, stored in
+  settings.json.
+- Multi-line paste confirmation: a paste carrying more than one line is caught
+  before the shell sees it and shown verbatim, so a pasted block cannot run
+  commands that were never read. Single-line pastes are untouched.
+- Follow-the-shell: a toggle on the file dock makes the pane track the
+  directory the focused terminal reports over OSC 7, remote or local.
+- **Self-update.** Harbour checks GitHub for a newer release on launch and
+  offers it in a bar under the tabs; installing is one click and the app then
+  asks to restart, never relaunching on its own while sessions are open. Every
+  update is verified against a signing key before it is applied.
+- Linux beyond Ubuntu: the `.rpm` names its dependencies, CI installs the
   `.rpm` on Fedora and the `.deb` on Debian stable after every build, and two
-  Arch packages - `harbour-bin` from the release's `.deb` and `harbour` from
-  source - are built from the checkout in CI and published to the AUR when a
-  release is published.
-- A release pipeline. Pushing a `vX.Y.Z` tag builds installers for Windows,
-  macOS (Apple silicon and Intel) and Linux, attaches them and a `SHA256SUMS`
-  file to a draft GitHub release with the changelog entry as its body, and
-  leaves publishing to a person. It refuses a tag whose version disagrees with
-  `package.json`, `tauri.conf.json` or `Cargo.toml`, or that has no changelog
-  section, before building anything.
+  Arch packages (`harbour-bin` from the release's `.deb`, `harbour` from
+  source) are built in CI and published to the AUR on release.
+- A release pipeline: pushing a `vX.Y.Z` tag builds installers for Windows,
+  macOS (both architectures) and Linux, attaches them and a `SHA256SUMS` file
+  to a draft GitHub release with the changelog entry as its body, and leaves
+  publishing to a person. It refuses a tag whose version disagrees with the
+  code, or that has no changelog section, before building anything.
+
+### Fixed
+
+- Connecting to a saved host failed with "no usable ssh agent" whenever the
+  machine's agent was absent, had hung up, or held no keys. The agent is tried
+  first for every host, and its failure ended the whole attempt instead of
+  moving on to the next method as `ssh` does; it is now a failed method like
+  any other, and the password prompt follows.
+
 - **Milestone 6: the transfer engine.** Drag rows between the remote and local
   panes, or onto a directory in the other pane, to copy them - a file, or a
   directory and everything under it - and drag files in from the desktop to

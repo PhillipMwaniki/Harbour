@@ -127,11 +127,26 @@ Nothing is code-signed yet. What that means for people installing:
   `tauri-action` handles the rest once they exist. Not configured.
 - **Linux** has no equivalent expectation.
 
-The **updater** signing key is different, and is the one the workflow already
-knows about: `TAURI_SIGNING_PRIVATE_KEY` and its password, as repository
-secrets. They are for the milestone 9 auto-update, which verifies every
-downloaded update against the public half. Until they exist the variables are
-empty, the build is unaffected, and no `.sig` files are produced.
+## The updater
+
+Harbour updates itself from these releases. The app carries the **public** half
+of a signing key (in `tauri.conf.json`, `plugins.updater.pubkey`); CI signs each
+release's `latest.json` with the **private** half, and the app verifies every
+update against the public half before applying it.
+
+For that to happen, two repository secrets must be set, for the keypair that
+matches the public key in the config:
+
+| Secret | Value |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | The contents of the private key file generated with the public key in the config |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The key's password (empty if it was generated without one) |
+
+Until they are set, the build still succeeds but produces no signatures and no
+`latest.json`, so the in-app updater simply finds nothing - it is inert, not
+broken. A new keypair can be generated with `pnpm tauri signer generate`; doing
+so means replacing `plugins.updater.pubkey` with the new public key in the same
+commit, or existing installs will reject every future update.
 
 ## Where things live
 

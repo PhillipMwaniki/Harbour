@@ -21,9 +21,10 @@ Rust core
              reader.rs  (batching + ack backpressure)
              logging.rs (session output to a file, on its own thread)
              shell.rs   (what can we launch here?)
-  ssh/       client.rs      (connect, authenticate, request a pty)
+  ssh/       client.rs      (connect, authenticate, a chain of jumps)
              transport.rs   (the running channel; opens further channels)
              sftp.rs        (SFTP on the terminal's connection; the registry)
+             forward.rs     (local port forwards on the connection)
              known_hosts.rs (trust, and nothing else)
              agent.rs       (SSH_AUTH_SOCK / OpenSSH pipe / Pageant)
   prompt.rs  round-trip questions to the user
@@ -75,6 +76,24 @@ tab sets `display: none` rather than unmounting, because unmounting an xterm
 instance loses its scrollback, and closing a pane is the only thing that ends
 the session behind it.
 
+## Jumps and forwards ride the same connection
+
+`connect` no longer owns a `TcpStream`; it runs over any stream that is
+`AsyncRead + AsyncWrite`. That is what makes a jump chain possible: the first
+hop is a socket, and each hop after it is a `direct-tcpip` channel opened on
+the connection before it, exactly as `ssh -J` builds a path. Every hop is a
+full SSH connection with its own host key decision and its own credentials, so
+`ClientHandler` holds an object-safe `DynAsker` rather than a generic asker -
+the one change that lets a chain carry a different saved host's secrets at
+every hop. The jump connections are kept alive for the life of the session and
+drop with it, from the destination outwards.
+
+A local port forward (`forward.rs`) is the same channel type put to a
+different use: Harbour listens on a local address and, per accepted connection,
+opens a `direct-tcpip` channel to the target through the session's opener. A
+forward can only ever reach what its session can, and it is torn down when the
+session closes.
+
 ## SFTP shares the terminal's connection
 
 An SSH connection carries any number of channels, and SFTP is just one more: a
@@ -123,6 +142,16 @@ editors save in place or by writing and renaming, and watching the directory
 catches both - with a short settle so one save is one upload. The upload
 truncates: a save shorter than the file it replaces must not leave the old
 tail behind.
+
+## Updating
+
+Harbour updates itself through the Tauri updater against the GitHub releases.
+On launch it asks whether a newer version is published; an update is offered,
+never forced, and applied only after the plugin has verified it against the
+public key baked into the binary. The last step is always a restart prompt -
+a terminal has live sessions, and a silent relaunch would discard them. The
+release pipeline produces and signs the `latest.json` the updater reads, so
+the mechanism is inert until the first signed, published release.
 
 ## Rules the code follows
 

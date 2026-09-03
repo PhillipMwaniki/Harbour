@@ -7,15 +7,16 @@ no account, no cloud, credentials never leave the machine unencrypted.
 Harbour is an Xshell + Xftp replacement for teams that live on Windows but ship
 to Linux, and it runs the same on macOS and Linux.
 
-> **Status: milestone 6 of 9.** Files move: drag between the remote and local
-> panes or in from the desktop, with a queue that pauses, resumes, asks before
-> overwriting and can pick up a partial copy where it stopped; open a remote
-> file in your editor and every save goes back. Underneath, SFTP on the
-> connection the terminal already has, a finished terminal with splits, find,
-> keymap, highlight rules and logging, SSH end to end with agent, key and
-> password auth, host keys checked against your existing `known_hosts`, saved
-> hosts with passwords in the OS keychain, and imports from `~/.ssh/config`
-> and Xshell backups. Port forwarding and snippets are next. See
+> **Status: milestone 7 of 9.** Jump hosts, port forwarding, snippets and
+> follow-the-shell all landed, and Harbour now updates itself from GitHub
+> releases. A saved host can sit behind a bastion (any depth), a local port can
+> be forwarded over the connection a terminal already has, a multi-line paste
+> is confirmed before it runs, saved commands insert from a palette, and the
+> file panes can follow the shell's directory. Underneath: SFTP and transfers
+> on the shared connection, a finished terminal with splits, find, keymap,
+> highlight rules and logging, SSH with agent, key and password auth, host keys
+> checked against your `known_hosts`, saved hosts with keychain passwords, and
+> imports from `~/.ssh/config` and Xshell backups. Packaging is next. See
 > [the roadmap](#roadmap).
 
 ## Requirements
@@ -166,6 +167,42 @@ opens it with whatever your machine opens that kind of file with, and uploads
 it back on every save. Close the entry in the queue - or the session - and the
 working copy is removed.
 
+## Jump hosts and port forwarding
+
+A saved host can sit **behind a bastion**: the Jump host field in the host
+editor points at another saved host to tunnel through, and that host can have a
+jump of its own, so a chain is as deep as the estate needs. Each hop verifies
+its own host key and authenticates with its own credentials, exactly as
+`ssh -J` does, and closing the terminal closes the whole chain.
+
+**Ctrl+Shift+P** opens port forwards for the focused SSH terminal: a local
+port (or an automatic one), a remote host and a port, carried over the
+connection the terminal already has - no second login. The remote host is
+resolved on the far side, so `localhost` is the server's own. A forward can be
+exposed on the network with an explicit opt-in that is warned about.
+
+## Snippets and the shell
+
+**Ctrl+Shift+I** opens the snippet palette: type to filter your saved commands,
+Enter to insert one into the terminal. Snippets are managed in Settings and
+stored in `settings.json`.
+
+A **multi-line paste** is confirmed first, showing exactly what will be sent -
+a pasted block runs each line as its newline lands, and reading it before it
+runs is the difference between a convenience and a foot-gun. Single-line pastes
+are not interrupted.
+
+The file panes can **follow the shell**: the Follow toggle makes the pane track
+the directory the focused terminal reports over OSC 7, remote or local. The
+shell has to emit OSC 7 (most modern bash/zsh setups can be configured to).
+
+## Updating
+
+Harbour checks GitHub for a newer release on launch and offers it in a bar
+under the tabs. Installing is one click; the app then asks to restart, and
+never relaunches on its own while sessions are open. Every update is verified
+against a signing key before it is applied.
+
 ## Themes
 
 Eleven built-in schemes - Harbour Dark, Dark+, Light+, Monokai, Dracula, Nord,
@@ -202,6 +239,8 @@ hand a key back to the terminal.
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Shift+E` | Show or hide the session manager |
 | `Ctrl+Shift+S` | Show or hide the file panes |
+| `Ctrl+Shift+P` | Show or hide port forwards |
+| `Ctrl+Shift+I` | Insert a snippet |
 | `Ctrl+Shift+F` | Find in the terminal |
 | `Ctrl+Shift+L` | Start or stop logging this session |
 | `Ctrl+,` | Settings |
@@ -233,6 +272,7 @@ src-tauri/src/    Rust core
   files/          directory listings, local and remote, in one shape
   transfer/       the queue, and the bytes it moves
   edit.rs         a remote file in a local editor, uploaded on save
+  ssh/forward.rs  local port forwards on a session's connection
   ssh/            connect and auth, channel transport, sftp, known_hosts, agent
   vault/          sqlite host store, os keychain, ssh_config and xshell imports
 docs/             architecture and the IPC contract
@@ -252,8 +292,10 @@ docs/             architecture and the IPC contract
    navigation. *(done)*
 6. **Transfer engine** - queue, resume, conflicts, drag and drop,
    open-in-editor. *(done)*
-7. Port forwarding, jump hosts (`ProxyJump`, including chains, with the
-   `~/.ssh/config` importer reading them), snippets, follow-cwd.
+7. **Port forwarding, jump hosts, snippets, follow-cwd** - local forwards,
+   bastions of any depth, a snippet palette, follow-the-shell, and a
+   multi-line paste confirmation. Self-update from GitHub releases. *(done;
+   reading `ProxyJump` from `~/.ssh/config` at import is a follow-up.)*
 8. Packaging: installers, portable mode, encrypted vault export/import. **MVP.**
 9. Triggers and notifications, fleet runner, SFTP extras, sync adapters,
    serial and telnet, auto-update, E2E tests.

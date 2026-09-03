@@ -402,6 +402,43 @@ type EditInfo = {
 };
 ```
 
+### Port forwards
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `forward_open_local` | `sessionId: string`, `spec: ForwardSpec` | `ForwardInfo` |
+| `forward_list` | - | `ForwardInfo[]` |
+| `forward_close` | `id: string` | `void` |
+
+A local forward is `ssh -L` on the SSH connection `sessionId` already has: it
+listens on a local address and, for each connection, opens a `direct-tcpip`
+channel to the target and copies bytes both ways. Nothing new authenticates; a
+forward reaches only what its session can, and closes with it. The bind happens
+inside `forward_open_local`, so a port already in use is an error there, not a
+silent failure later. Changes arrive as `forward:update` events carrying the
+whole forward.
+
+```ts
+type ForwardSpec = {
+  bindAddress: string;   // 127.0.0.1 keeps it local; 0.0.0.0 exposes it
+  localPort: number;     // 0 asks for a free port, reported back
+  host: string;          // resolved on the remote side
+  port: number;
+};
+
+type ForwardInfo = {
+  id: string;
+  sessionId: string;
+  bindAddress: string;
+  localPort: number;     // the port actually bound
+  host: string;
+  port: number;
+  state: "listening" | "closed" | "failed";
+  connections: number;   // accepted over the forward's life
+  error: string | null;
+};
+```
+
 ## Events
 
 | Event | Payload |
@@ -410,6 +447,7 @@ type EditInfo = {
 | `session:closed` | `{ sessionId, reason: "exit" \| "killed" \| "error", exitCode: number \| null }` |
 | `transfer:update` | `Transfer` - the whole transfer, on every change |
 | `edit:update` | `EditInfo` - on open, on every upload, on failure, on close |
+| `forward:update` | `ForwardInfo` - the whole forward, on every change |
 
 `session:closed` fires when the child process is reaped, whether it exited on
 its own or was killed by `session_close`. For an SSH session it fires when the
@@ -478,6 +516,7 @@ than useless.
 | `TRANSFER_ERROR` | A transfer command did not apply: not waiting on a conflict, still running |
 | `TRANSFER_NOT_FOUND` | No transfer with that id |
 | `EDIT_ERROR` | A file could not be opened for editing, or no such edit |
+| `FORWARD_ERROR` | A forward could not bind, or no such forward |
 | `LOG_FAILED` | A session log could not be opened |
 | `PROMPT_NOT_FOUND` | `connection_respond` for a prompt no longer waiting |
 | `PROMPT_TIMED_OUT` | Nobody answered a prompt within five minutes |
@@ -489,5 +528,5 @@ useless when the real problem is `PasswordAuthentication no`.
 
 ## Not yet implemented
 
-The spec defines further domains - `forward_*` and `fleet_*`. They are listed here so the naming stays consistent when they land,
+The spec defines one further domain - `fleet_*`. It is listed here so the naming stays consistent when it lands,
 but no handler exists yet.
