@@ -323,6 +323,41 @@ export interface LogStatus {
   error: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+
+/**
+ * What an entry is once a symlink has been followed: a link to a directory is
+ * a `dir` with `symlink: true`, so it can be entered; a dangling one is
+ * `other`.
+ */
+export type EntryKind = "dir" | "file" | "other";
+
+export interface FileEntry {
+  name: string;
+  kind: EntryKind;
+  symlink: boolean;
+  /** A dotfile, or a file Windows marks hidden. */
+  hidden: boolean;
+  /** Bytes; `null` for anything that is not a regular file. */
+  size: number | null;
+  /** Seconds since the Unix epoch. */
+  modified: number | null;
+  /** Unix mode bits, where the file system has them. */
+  permissions: number | null;
+  owner: string | null;
+  group: string | null;
+}
+
+/** A directory listing, local or remote, with its path made canonical. */
+export interface DirListing {
+  path: string;
+  /** `null` at a root, so the pane knows there is no further up. */
+  parent: string | null;
+  entries: FileEntry[];
+}
+
 /** Stable error codes; see `AppError::code` on the Rust side. */
 export type AppErrorCode =
   | "SESSION_NOT_FOUND"
@@ -346,6 +381,8 @@ export type AppErrorCode =
   | "SETTINGS_ERROR"
   | "SCHEME_IMPORT_FAILED"
   | "HIGHLIGHT_IMPORT_FAILED"
+  | "SFTP_ERROR"
+  | "FILES_ERROR"
   | "LOG_FAILED"
   | "PROMPT_NOT_FOUND"
   | "PROMPT_TIMED_OUT"

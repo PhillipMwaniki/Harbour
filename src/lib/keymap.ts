@@ -23,6 +23,7 @@ export type ActionId =
   | "tab.next"
   | "tab.previous"
   | "sessions.toggle"
+  | "files.toggle"
   | "search.open"
   | "settings.open"
   | "log.toggle"
@@ -81,6 +82,7 @@ export const actions: ActionSpec[] = [
     group: "View",
     defaults: ["Ctrl+Shift+E"],
   },
+  { id: "files.toggle", label: "Show or hide the file panes", group: "View", defaults: ["Ctrl+Shift+S"] },
   { id: "settings.open", label: "Settings", group: "View", defaults: ["Ctrl+,"] },
   { id: "log.toggle", label: "Start or stop logging", group: "View", defaults: ["Ctrl+Shift+L"] },
   { id: "font.increase", label: "Larger text", group: "View", defaults: ["Ctrl+="] },

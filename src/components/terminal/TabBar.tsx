@@ -15,7 +15,9 @@ interface Props {
   onSplit: (direction: "row" | "column") => void;
   onToggleSessions: () => void;
   onSettings: () => void;
+  onToggleFiles: () => void;
   sessionsOpen: boolean;
+  filesOpen: boolean;
 }
 
 /** What the hover tooltip says, which is where a dead pane explains itself. */
@@ -42,7 +44,9 @@ export function TabBar({
   onSplit,
   onToggleSessions,
   onSettings,
+  onToggleFiles,
   sessionsOpen,
+  filesOpen,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -201,6 +205,17 @@ export function TabBar({
           </div>
         )}
       </div>
+
+      <button
+        type="button"
+        aria-label="Toggle files"
+        aria-pressed={filesOpen}
+        title="Files (Ctrl+Shift+S)"
+        className="border-l border-[var(--hb-border)] px-3 text-xs hover:bg-[var(--hb-hover)]"
+        onClick={onToggleFiles}
+      >
+        Files
+      </button>
 
       <ThemePicker />
 

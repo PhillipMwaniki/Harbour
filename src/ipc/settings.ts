@@ -92,10 +92,4 @@ export function logFileName(template: string, title: string, when = new Date()):
   return safe === "" ? `session-${date}.log` : safe;
 }
 
-/** Joins a directory and a file name without caring which slash is in use. */
-export function joinPath(directory: string, name: string): string {
-  if (directory === "") return name;
-  const separator = directory.includes("\\") && !directory.includes("/") ? "\\" : "/";
-  const trimmed = directory.replace(/[\\/]+$/, "");
-  return `${trimmed}${separator}${name}`;
-}
+export { joinPath } from "@/lib/files";

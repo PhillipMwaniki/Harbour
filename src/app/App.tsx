@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { FileDock } from "@/components/files/FileDock";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { ConnectDialog, type ConnectRequest } from "@/components/ssh/ConnectDialog";
 import { HostKeyDialog } from "@/components/ssh/HostKeyDialog";
@@ -36,7 +37,8 @@ import {
 import type { SplitDirection } from "@/lib/panes";
 import { toggleLog } from "@/lib/sessionLog";
 import { activePrompt, usePrompts } from "@/stores/prompts";
-import { focusedPane, paneForSession, useSessions, type Pane } from "@/stores/sessions";
+import { useFiles } from "@/stores/files";
+import { activePane, focusedPane, paneForSession, useSessions, type Pane } from "@/stores/sessions";
 import { applyThemeVariables, useSettings, useTerminalTheme } from "@/stores/settings";
 import { selectedHost, useVault } from "@/stores/vault";
 
@@ -56,6 +58,7 @@ export default function App() {
   const vaultTree = useVault((state) => state.tree);
   const vaultError = useVault((state) => state.error);
   const keymap = useSettings((state) => state.settings.keymap);
+  const filesOpen = useFiles((state) => state.open);
   const theme = useTerminalTheme();
   const [banner, setBanner] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>({ kind: "none" });
@@ -138,6 +141,9 @@ export default function App() {
         event.exitCode,
         lost ? "the connection was lost" : undefined,
       );
+      // Its remote listing goes with it; the pane must not keep showing a
+      // server that is no longer connected.
+      useFiles.getState().forget(event.sessionId);
       if (!lost) state.closePane(found.tab.tabId, found.pane.paneId);
     });
     return () => {
@@ -267,6 +273,9 @@ export default function App() {
         case "sessions.toggle":
           setSidebar((open) => !open);
           return;
+        case "files.toggle":
+          useFiles.getState().toggle();
+          return;
         case "search.open":
           paneHandle(focused?.pane.paneId)?.openSearch();
           return;
@@ -318,6 +327,13 @@ export default function App() {
   const selected = useVault((state) => state.selected);
   const hostThemes = useSettings((state) => state.settings.hostThemes);
 
+  // The remote pane follows the focused terminal. A local shell has no remote
+  // side, and the dock says so rather than showing the last host's files.
+  const activeTab = tabs.find((tab) => tab.tabId === activeTabId);
+  const focusedTerminal = activeTab ? activePane(activeTab) : undefined;
+  const remoteSession =
+    focusedTerminal && focusedTerminal.target.kind !== "local" ? focusedTerminal.sessionId : null;
+
   return (
     <div className="flex h-screen w-screen flex-col bg-[var(--hb-bg)] text-[var(--hb-fg)]">
       <TabBar
@@ -330,8 +346,10 @@ export default function App() {
         onNewSsh={() => setModal({ kind: "connect" })}
         onSplit={splitFocused}
         onToggleSessions={() => setSidebar((open) => !open)}
+        onToggleFiles={() => useFiles.getState().toggle()}
         onSettings={() => setModal({ kind: "settings" })}
         sessionsOpen={sidebar}
+        filesOpen={filesOpen}
       />
 
       {(banner ?? vaultError) && (
@@ -499,6 +517,14 @@ export default function App() {
             />
           )}
         </main>
+
+        {filesOpen && (
+          <FileDock
+            sessionId={remoteSession}
+            sessionTitle={remoteSession && focusedTerminal ? focusedTerminal.title : null}
+            onClose={() => useFiles.getState().setOpen(false)}
+          />
+        )}
       </div>
     </div>
   );
