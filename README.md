@@ -47,6 +47,12 @@ pnpm tauri:build              # installers for the current platform
 Set `HARBOUR_LOG=harbour_lib=debug` for verbose backend logging. Logs are
 written to the platform app-log directory as well as stderr.
 
+Installers for each tagged version are on the
+[Releases](https://github.com/PhillipMwaniki/Harbour/releases) page, with a
+`SHA256SUMS` file beside them. They are not code-signed yet: Windows shows the
+"unknown publisher" warning, and macOS needs a right-click → Open the first
+time. How a release is cut is in [`docs/releasing.md`](docs/releasing.md).
+
 ## Connecting over SSH
 
 **Ctrl+Shift+N**, or *SSH connection…* in the tab-bar menu. Give a host, a
@@ -259,6 +265,7 @@ backup layout is in `src-tauri/src/xts.rs`.
 - [`docs/architecture.md`](docs/architecture.md) - how the pieces fit and the rules they follow
 - [`docs/ipc.md`](docs/ipc.md) - the command and event contract
 - [`docs/security.md`](docs/security.md) - host keys, secrets, and what is not implemented yet
+- [`docs/releasing.md`](docs/releasing.md) - how a tag becomes a set of installers
 
 ## Licence
 

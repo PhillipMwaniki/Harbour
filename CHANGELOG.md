@@ -7,6 +7,12 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Added
 
+- A release pipeline. Pushing a `vX.Y.Z` tag builds installers for Windows,
+  macOS (Apple silicon and Intel) and Linux, attaches them and a `SHA256SUMS`
+  file to a draft GitHub release with the changelog entry as its body, and
+  leaves publishing to a person. It refuses a tag whose version disagrees with
+  `package.json`, `tauri.conf.json` or `Cargo.toml`, or that has no changelog
+  section, before building anything.
 - **Milestone 5: SFTP on the shared connection.** File panes (Ctrl+Shift+S)
   docked beside the terminals: the remote machine over SFTP on top, the local
   machine below. The remote side is a second channel on the SSH connection the
