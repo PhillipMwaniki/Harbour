@@ -49,6 +49,9 @@
     "linux": {
       "deb": {
         "depends": []
+      },
+      "rpm": {
+        "depends": ["webkit2gtk4.1", "gtk3", "librsvg2"]
       }
     }
   }

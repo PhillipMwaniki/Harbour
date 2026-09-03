@@ -1,0 +1,33 @@
+# Maintainer: Phillip Mwaniki <mwanikiphillip@gmail.com>
+#
+# Repackages the .deb from the GitHub release. The from-source package is
+# `harbour`. Both are published by .github/workflows/aur.yml when a release is
+# published; `pkgver` and `_debfile` below are rewritten to match it.
+
+pkgname=harbour-bin
+_pkgname=harbour
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="SSH client, terminal and SFTP file manager in one window (binary release)"
+arch=('x86_64')
+url="https://github.com/PhillipMwaniki/Harbour"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'librsvg' 'openssl' 'gcc-libs' 'glibc')
+provides=("${_pkgname}=${pkgver}")
+conflicts=("${_pkgname}")
+options=('!strip')
+# The asset the release pipeline actually produced; rewritten at publish time.
+_debfile="harbour_${pkgver}_amd64.deb"
+source=(
+  "${_debfile}::${url}/releases/download/v${pkgver}/${_debfile}"
+  "LICENSE-${pkgver}::${url}/raw/v${pkgver}/LICENSE"
+)
+sha256sums=('SKIP' 'SKIP')
+noextract=("${_debfile}")
+
+package() {
+  bsdtar -xf "${srcdir}/${_debfile}" -C "${srcdir}"
+  bsdtar -xf "${srcdir}"/data.tar.* -C "${pkgdir}"
+  install -Dm644 "${srcdir}/LICENSE-${pkgver}" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  chmod -R go-w "${pkgdir}/usr"
+}

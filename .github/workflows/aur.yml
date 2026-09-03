@@ -1,0 +1,111 @@
+# Publishes the two Arch packages when a release is published (not when the
+# draft is created: the AUR must never point at installers nobody has looked
+# at). `harbour-bin` repackages the release's .deb; `harbour` builds from the
+# tagged source. Both PKGBUILDs live in packaging/aur and are stamped with the
+# version here; checksums are computed on the way out.
+#
+# Needs three repository secrets - AUR_SSH_PRIVATE_KEY, AUR_USERNAME,
+# AUR_EMAIL - for an AUR account that owns (or will create, on first push)
+# both packages. Without them the workflow says so and does nothing.
+name: AUR
+
+on:
+  release:
+    types: [published]
+  # For publishing a version already on the Releases page, or retrying.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, as X.Y.Z; must already be a published release
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to the AUR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Which version
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          INPUT: ${{ github.event.inputs.version }}
+        run: |
+          version="${INPUT:-${TAG#v}}"
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$version' is not an X.Y.Z version"; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Are the AUR secrets set
+        id: secrets
+        env:
+          KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::AUR_SSH_PRIVATE_KEY is not set; nothing is published. See docs/releasing.md."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find the .deb on the release
+        if: steps.secrets.outputs.enabled == 'true'
+        id: deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          name=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name | select(endswith("amd64.deb"))' | head -n 1)
+          if [ -z "$name" ]; then
+            echo "::error::release v$VERSION has no amd64 .deb attached"
+            exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp the PKGBUILDs
+        if: steps.secrets.outputs.enabled == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DEB: ${{ steps.deb.outputs.name }}
+        run: |
+          for f in packaging/aur/harbour-bin/PKGBUILD packaging/aur/harbour/PKGBUILD; do
+            sed -i "s/^pkgver=.*/pkgver=$VERSION/; s/^pkgrel=.*/pkgrel=1/" "$f"
+          done
+          sed -i "s|^_debfile=.*|_debfile=\"$DEB\"|" packaging/aur/harbour-bin/PKGBUILD
+          grep -n "^pkgver=\|^_debfile=" packaging/aur/*/PKGBUILD
+
+      # The binary package is also test-built here: it only downloads the
+      # .deb, so that is quick, and it proves the asset name and the
+      # checksums before anything reaches the AUR.
+      - name: Publish harbour-bin
+        if: steps.secrets.outputs.enabled == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v4
+        with:
+          pkgname: harbour-bin
+          pkgbuild: packaging/aur/harbour-bin/PKGBUILD
+          updpkgsums: true
+          test: true
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: Update to ${{ steps.version.outputs.version }}
+
+      # The source package is built from the checkout on every push by ci.yml,
+      # so a test build here would only repeat that at release time.
+      - name: Publish harbour
+        if: steps.secrets.outputs.enabled == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v4
+        with:
+          pkgname: harbour
+          pkgbuild: packaging/aur/harbour/PKGBUILD
+          updpkgsums: true
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: Update to ${{ steps.version.outputs.version }}
