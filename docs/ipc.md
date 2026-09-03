@@ -244,6 +244,53 @@ colour indices are resource ids offset by 280, and the palette is `BBGGRR`
 (`COLORREF`), the reverse of every other file in the backup. A keyword not
 marked `UseRegex` is escaped so it matches itself.
 
+### Files
+
+| Command | Arguments | Returns |
+| --- | --- | --- |
+| `sftp_home` | `sessionId: string` | `string` |
+| `sftp_list` | `sessionId: string`, `path: string` | `DirListing` |
+| `sftp_close` | `sessionId: string` | `void` |
+| `local_home` | - | `string` |
+| `local_roots` | - | `string[]` |
+| `local_list` | `path: string` | `DirListing` |
+
+The remote side rides the SSH connection a terminal already has. `sessionId`
+is the terminal's session; the first `sftp_*` call for it opens a channel with
+the `sftp` subsystem on that connection - **no second host key decision, no
+second password** - and later calls reuse it. A local shell's id, or a session
+that has closed, gets `SFTP_ERROR`. A server without SFTP is reported with the
+server's own refusal.
+
+```ts
+type DirListing = {
+  path: string;            // made absolute and canonical
+  parent: string | null;   // null at a root
+  entries: FileEntry[];
+};
+
+type FileEntry = {
+  name: string;
+  kind: "dir" | "file" | "other";  // what a symlink points at, once followed
+  symlink: boolean;
+  hidden: boolean;                 // dotfile, or Windows hidden attribute
+  size: number | null;             // regular files only
+  modified: number | null;         // seconds since the epoch
+  permissions: number | null;      // Unix mode bits, where they exist
+  owner: string | null;
+  group: string | null;
+};
+```
+
+The listing carries its own `parent`, and `path` comes back canonical, so the
+frontend never does path arithmetic that depends on knowing whether `..` means
+dropping a `/` component or a `\` one. `local_list` on Windows returns plain
+`C:\...` paths, never the `\\?\` form `canonicalize` produces. Hidden entries
+are included and flagged: showing them is a toggle, not a round trip.
+
+Nothing in this domain writes to either file system. Transfers, and with them
+the first mutation, are milestone 6.
+
 ## Events
 
 | Event | Payload |
@@ -313,6 +360,8 @@ than useless.
 | `SETTINGS_ERROR` | The settings file could not be written |
 | `SCHEME_IMPORT_FAILED` | That path held no colour scheme Harbour understands |
 | `HIGHLIGHT_IMPORT_FAILED` | That path held no Xshell highlight set |
+| `SFTP_ERROR` | The session has no remote side, or its SFTP channel could not be opened |
+| `FILES_ERROR` | A directory could not be listed; the message names it |
 | `LOG_FAILED` | A session log could not be opened |
 | `PROMPT_NOT_FOUND` | `connection_respond` for a prompt no longer waiting |
 | `PROMPT_TIMED_OUT` | Nobody answered a prompt within five minutes |
@@ -324,6 +373,5 @@ useless when the real problem is `PasswordAuthentication no`.
 
 ## Not yet implemented
 
-The spec defines further domains - `sftp_*`, `transfer_*`, `forward_*` and
-`fleet_*`. They are listed here so the naming stays consistent when they land,
+The spec defines further domains - `transfer_*`, `forward_*` and `fleet_*`. They are listed here so the naming stays consistent when they land,
 but no handler exists yet.

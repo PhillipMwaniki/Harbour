@@ -7,6 +7,20 @@ All notable changes to Harbour are recorded here. The format follows
 
 ### Added
 
+- **Milestone 5: SFTP on the shared connection.** File panes (Ctrl+Shift+S)
+  docked beside the terminals: the remote machine over SFTP on top, the local
+  machine below. The remote side is a second channel on the SSH connection the
+  focused terminal already has - no second host key prompt, no second
+  password - and follows focus, each session keeping its place. A local shell
+  shows the pane empty rather than the last host's files.
+- Navigation in both panes: double-click, a typed path, up, home, refresh,
+  sort by name, size or date, and a hidden-files toggle that costs no round
+  trip. Listings come back with their path canonical and their parent named,
+  so `..` and symlinked directories resolve on the machine that owns them and
+  the frontend never guesses at path separators. On Windows the local pane
+  offers the drives when it reaches a root.
+- Looking only: nothing in this milestone writes to either file system.
+  Transfers are milestone 6.
 - Importing straight from an Xshell `.xts` backup - the file *Tools › Backup*
   writes - as well as from an export directory. The archive is read in place;
   the private keys and credential file it also holds are never opened.

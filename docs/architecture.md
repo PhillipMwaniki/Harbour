@@ -8,9 +8,10 @@ rendering surface, not a place where privileged work happens.
 React frontend (webview)
   TabBar - PaneTree -> TerminalView(s) - SearchBar, highlight layer
            ConnectDialog, HostKeyDialog, SecretDialog, SettingsDialog
-           [SftpPane, TransferQueue: milestone 5+]
+           FileDock -> FilePane (remote over SFTP, and local)
+           [TransferQueue: milestone 6]
   SessionTree - HostDialog, ImportDialog
-  Zustand stores: sessions, prompts, vault, settings
+  Zustand stores: sessions, prompts, vault, settings, files
   lib/       panes (split tree), keymap, highlight, themes
         |  invoke() / listen() / Channel<bytes>
 Rust core
@@ -21,10 +22,13 @@ Rust core
              logging.rs (session output to a file, on its own thread)
              shell.rs   (what can we launch here?)
   ssh/       client.rs      (connect, authenticate, request a pty)
-             transport.rs   (the running channel)
+             transport.rs   (the running channel; opens further channels)
+             sftp.rs        (SFTP on the terminal's connection; the registry)
              known_hosts.rs (trust, and nothing else)
              agent.rs       (SSH_AUTH_SOCK / OpenSSH pipe / Pageant)
   prompt.rs  round-trip questions to the user
+  files/     directory listings in one shape
+             local.rs  (std::fs, made to look like SFTP)
   settings/  preferences, and the colour schemes imported into them
              store.rs  (settings.json: atomic write, never fatal)
              scheme.rs (VS Code / Windows Terminal / iTerm importers)
@@ -66,6 +70,27 @@ A pane's terminal is created once and kept for the life of the pane. Hiding a
 tab sets `display: none` rather than unmounting, because unmounting an xterm
 instance loses its scrollback, and closing a pane is the only thing that ends
 the session behind it.
+
+## SFTP shares the terminal's connection
+
+An SSH connection carries any number of channels, and SFTP is just one more: a
+channel with the `sftp` subsystem on it. The file pane therefore never
+connects or authenticates. It asks the terminal's connection for a second
+channel and rides the trust and credentials that connection already
+established - one host key prompt, one password, however many panes.
+
+russh's connection handle is single-owner and lives in the transport's writer
+task, so the channel is opened *through* that task: `ChannelOpener` is a
+handle on the writer's command queue, and `Command::OpenChannel` asks the task
+to open a session channel and hand it back. Nothing else ever holds the
+connection, which is what keeps "close the terminal" meaning "close
+everything".
+
+`ssh::sftp::Connections` maps live session ids to their openers, and to the
+SFTP channel once one has been opened. It sits beside the session manager
+rather than inside it: the manager knows about transports and nothing about
+SSH, and this is the one place that needs to. A local shell has no entry,
+which is how `sftp_*` learns a session has no remote side.
 
 ## Rules the code follows
 
@@ -115,6 +140,8 @@ the session behind it.
 | Session log writer | `harbour-session-log` OS thread, one per open log |
 | SSH channel reader | tokio task, one per session |
 | SSH channel writer, holding the session handle | tokio task, one per session |
+| SFTP channel open | inside the writer task, on request; the channel itself is driven by `russh-sftp` |
+| Local directory listing | `spawn_blocking`; `std::fs` and drive probing touch the disk |
 | russh session event loop | tokio task, spawned by russh |
 
 `LocalTransport` guards its writer, master pty and killer behind separate
@@ -162,6 +189,8 @@ within a folder (positions exist, nothing sets them), a master password, and
 encrypted export - the last two are milestone 8. Host certificates, agent
 forwarding and port forwarding are later still.
 
-SFTP, transfers and the fleet runner each add a sibling module under
+The file panes are read-only: milestone 5 is looking, and milestone 6 adds
+the transfer engine and with it the first mutation of either file system.
+Transfers and the fleet runner each add a sibling module under
 `src-tauri/src/`, and the `SessionKind` enum grows a variant per transport. The
 IPC shapes for those are reserved in `docs/ipc.md`.

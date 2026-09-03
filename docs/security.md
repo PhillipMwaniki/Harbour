@@ -118,6 +118,12 @@ Implemented:
   code path that opens the others; a test asserts that nothing the reader
   returns contains what is under `UserKeys`. Entry names are checked against
   path traversal before use, as any untrusted archive's should be.
+- SFTP that rides the terminal's connection. The file pane opens a second
+  channel on a session that has already verified its host key and
+  authenticated; it never holds a credential, never makes a trust decision,
+  and cannot reach a host the user has not already connected to. In this
+  milestone it is read-only: nothing it can be asked to do changes either
+  file system.
 - A settings file that holds no secrets of any kind - theme, font, keymap,
   highlight rules, per-host themes, where logs go - and that is treated as
   untrusted input on the way in: a malformed one is moved aside and replaced

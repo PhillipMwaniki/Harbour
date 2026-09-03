@@ -7,15 +7,15 @@ no account, no cloud, credentials never leave the machine unencrypted.
 Harbour is an Xshell + Xftp replacement for teams that live on Windows but ship
 to Linux, and it runs the same on macOS and Linux.
 
-> **Status: milestone 4 of 9.** The terminal is finished: tabs, split panes,
-> find in scrollback, a user-editable keymap, highlight rules and session
-> logging, on top of local shells and SSH that already worked end to end -
-> ConPTY and forkpty, remote shells over `russh` with agent, key and password
-> auth, host key verification against your existing `known_hosts`, saved hosts
-> in a folder tree with passwords in the OS keychain, imports from
-> `~/.ssh/config` and Xshell, and batched output with real backpressure. Eleven
-> built-in colour schemes, plus any VS Code, iTerm or Windows Terminal scheme
-> you import. SFTP and transfers are next. See [the roadmap](#roadmap).
+> **Status: milestone 5 of 9.** The file panes are in: browse the remote
+> machine over SFTP on the connection the terminal already has - no second
+> login - beside a pane for the local machine. Underneath, a finished
+> terminal: tabs, split panes, find in scrollback, a user-editable keymap,
+> highlight rules and session logging; local shells and SSH end to end with
+> agent, key and password auth; host keys checked against your existing
+> `known_hosts`; saved hosts with passwords in the OS keychain; imports from
+> `~/.ssh/config` and Xshell backups. Transfers are next. See
+> [the roadmap](#roadmap).
 
 ## Requirements
 
@@ -123,6 +123,23 @@ another. They are regular expressions with a foreground and a background, and
 the rule listed first wins any text two of them match. Xshell highlight sets
 (`.hls`, or the ones inside a `.xts` backup) import from the same page.
 
+## Files
+
+**Ctrl+Shift+S** opens the file panes beside the terminals: the remote machine
+on top, your own below. The remote pane follows the focused terminal and rides
+its connection - SFTP is a second channel on the SSH session you already have,
+so there is no second host key prompt and no second password, and switching to
+another host's terminal shows that host's files, each keeping its place. A
+local shell shows the pane empty rather than the last host's listing.
+
+Both panes navigate the same way: double-click a directory, type a path into
+the bar, go up or home, sort by name, size or date, and show hidden files with
+one toggle. Paths come back canonical from the machine that owns them, so `..`
+and symlinked directories resolve to where you actually are.
+
+This milestone is looking only. Transfers - drag and drop, a queue, resume,
+conflicts - are milestone 6.
+
 ## Themes
 
 Eleven built-in schemes - Harbour Dark, Dark+, Light+, Monokai, Dracula, Nord,
@@ -158,6 +175,7 @@ hand a key back to the terminal.
 | `Ctrl+Shift+[` / `Ctrl+Shift+]` | Previous / next pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Shift+E` | Show or hide the session manager |
+| `Ctrl+Shift+S` | Show or hide the file panes |
 | `Ctrl+Shift+F` | Find in the terminal |
 | `Ctrl+Shift+L` | Start or stop logging this session |
 | `Ctrl+,` | Settings |
@@ -177,7 +195,7 @@ defaults rather than stopping the app from starting.
 ```
 src/              React frontend
   app/            layout shell
-  components/     terminal and panes, ssh dialogs, settings, session tree
+  components/     terminal and panes, file panes, ssh dialogs, settings, session tree
   ipc/            typed wrappers around invoke/listen - the only place
                   that knows command names
   stores/         zustand stores, one per domain
@@ -186,7 +204,8 @@ src-tauri/src/    Rust core
   commands/       thin IPC handlers
   session/        session manager, pty, output pump, logging, shell detection
   settings/       settings.json, and the colour schemes imported into it
-  ssh/            connect and auth, channel transport, known_hosts, agent
+  files/          directory listings, local and remote, in one shape
+  ssh/            connect and auth, channel transport, sftp, known_hosts, agent
   vault/          sqlite host store, os keychain, ssh_config and xshell imports
 docs/             architecture and the IPC contract
 ```
@@ -201,7 +220,8 @@ docs/             architecture and the IPC contract
 4. **Terminal polish** - split panes, find in scrollback, a user-editable
    keymap, highlight rules, session logging, and importing VS Code / iTerm /
    Windows Terminal colour schemes. *(done)*
-5. SFTP on the shared connection: docked pane, local pane, navigation.
+5. **SFTP on the shared connection** - docked file panes, local pane,
+   navigation. *(done)*
 6. Transfer engine: queue, resume, conflicts, drag and drop, open-in-editor.
 7. Port forwarding, snippets, follow-cwd.
 8. Packaging: installers, portable mode, encrypted vault export/import. **MVP.**
