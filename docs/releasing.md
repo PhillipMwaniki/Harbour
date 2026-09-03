@@ -142,9 +142,10 @@ matches the public key in the config:
 | `TAURI_SIGNING_PRIVATE_KEY` | The contents of the private key file generated with the public key in the config |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The key's password (empty if it was generated without one) |
 
-Until they are set, the build still succeeds but produces no signatures and no
-`latest.json`, so the in-app updater simply finds nothing - it is inert, not
-broken. A new keypair can be generated with `pnpm tauri signer generate`; doing
+Until they are set, the release still builds and the draft is still created -
+just unsigned, with no `latest.json`, so the in-app updater finds nothing and
+is inert. Add the secrets and re-run the Release workflow for a signed release
+the updater will pick up. A new keypair can be generated with `pnpm tauri signer generate`; doing
 so means replacing `plugins.updater.pubkey` with the new public key in the same
 commit, or existing installs will reject every future update.
 
