@@ -11,6 +11,8 @@
 //! | VS Code theme (`.json`, with comments) | the `colors` map: `terminal.ansi*`, falling back to `editor.*` |
 //! | Windows Terminal `settings.json` | every entry of `schemes`, or a bare scheme object |
 //! | iTerm2 (`.itermcolors`) | the `Ansi N Color` dicts of the XML plist |
+//! | Xshell (`.scs`) | the `[Color Scheme]` section, `(bold)` entries as the bright half |
+//! | Xshell backup (`.xts`) | every `.scs` under `xsl/ColorScheme Files` |
 //!
 //! Nothing here writes: the caller reviews what was found and saves the ones
 //! it wants, the same way the vault importers work.
@@ -23,6 +25,8 @@ use serde_json::Value;
 use crate::error::{AppError, AppResult};
 use crate::settings::color::Rgb;
 use crate::settings::{ThemeKind, ThemeSpec, UiColors, XtermColors};
+use crate::text::{decode, ini, ini_get};
+use crate::xts;
 
 /// What one import found. `notes` carries anything that was not a scheme, so
 /// a directory of forty files does not silently yield thirty-eight themes.
@@ -40,6 +44,10 @@ pub const IMPORTED_PREFIX: &str = "imported.";
 
 /// Reads a file, or every scheme file in a directory.
 pub fn import(path: &Path) -> AppResult<SchemeImport> {
+    if xts::Archive::is_archive(path) {
+        return import_archive(path);
+    }
+
     let meta = std::fs::metadata(path).map_err(|err| AppError::SchemeImport {
         path: path.display().to_string(),
         reason: err.to_string(),
@@ -93,10 +101,42 @@ pub fn import(path: &Path) -> AppResult<SchemeImport> {
     })
 }
 
+/// The colour schemes inside a `.xts` backup.
+fn import_archive(path: &Path) -> AppResult<SchemeImport> {
+    let fail = |reason: String| AppError::SchemeImport {
+        path: path.display().to_string(),
+        reason,
+    };
+    let mut archive = xts::Archive::open(path).map_err(|err| fail(err.to_string()))?;
+    let source = file_label(path);
+
+    let mut themes = Vec::new();
+    let mut notes = Vec::new();
+    for scheme in archive
+        .color_schemes()
+        .map_err(|err| fail(err.to_string()))?
+    {
+        match parse_scs(&scheme.text) {
+            Ok(colors) => themes.push(theme_from(&scheme.name, &source, colors)),
+            Err(reason) => notes.push(format!("{}.scs: {reason}", scheme.name)),
+        }
+    }
+    if themes.is_empty() {
+        return Err(fail("no colour schemes in the backup".into()));
+    }
+
+    dedupe_ids(&mut themes);
+    Ok(SchemeImport {
+        source: path.display().to_string(),
+        themes,
+        notes,
+    })
+}
+
 fn has_scheme_extension(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|ext| ext.to_str()),
-        Some("itermcolors" | "json" | "jsonc")
+        Some("itermcolors" | "json" | "jsonc" | "scs")
     )
 }
 
@@ -121,13 +161,24 @@ fn dedupe_ids(themes: &mut [ThemeSpec]) {
 }
 
 fn parse_file(path: &Path) -> Result<Vec<ThemeSpec>, String> {
-    let text = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
+    // Xshell writes UTF-16; everything else here is UTF-8. `decode` reads both.
+    let text = std::fs::read(path)
+        .map(|bytes| decode(&bytes))
+        .map_err(|err| err.to_string())?;
     let source = file_label(path);
     let fallback_label = path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("Imported")
         .to_string();
+
+    if text.to_ascii_lowercase().contains("[color scheme]") {
+        return Ok(vec![theme_from(
+            &fallback_label,
+            &source,
+            parse_scs(&text)?,
+        )]);
+    }
 
     if text.trim_start().starts_with("<?xml") || text.contains("<plist") {
         let colors = parse_itermcolors(&text)?;
@@ -255,6 +306,50 @@ fn vscode_colors(colors: &Value) -> XtermColors {
         bright_cyan: hex_at(colors, "terminal.ansiBrightCyan"),
         bright_white: hex_at(colors, "terminal.ansiBrightWhite"),
     }
+}
+
+/// An Xshell `.scs` scheme: an INI with one `[Color Scheme]` section, colours
+/// as bare `rrggbb`, and `(bold)` variants standing in for the bright half.
+/// `text(bold)` has no counterpart in xterm and is left out.
+pub fn parse_scs(contents: &str) -> Result<XtermColors, String> {
+    let sections = ini(contents);
+    if !sections.contains_key("COLOR SCHEME") {
+        return Err("not an Xshell colour scheme: no [Color Scheme] section".into());
+    }
+    let hex = |key: &str| {
+        ini_get(&sections, "COLOR SCHEME", key)
+            .and_then(Rgb::parse)
+            .map(Rgb::to_hex)
+    };
+
+    let colors = XtermColors {
+        background: hex("BACKGROUND"),
+        foreground: hex("TEXT"),
+        cursor: None,
+        cursor_accent: None,
+        selection_background: None,
+        selection_foreground: None,
+        black: hex("BLACK"),
+        red: hex("RED"),
+        green: hex("GREEN"),
+        yellow: hex("YELLOW"),
+        blue: hex("BLUE"),
+        magenta: hex("MAGENTA"),
+        cyan: hex("CYAN"),
+        white: hex("WHITE"),
+        bright_black: hex("BLACK(BOLD)"),
+        bright_red: hex("RED(BOLD)"),
+        bright_green: hex("GREEN(BOLD)"),
+        bright_yellow: hex("YELLOW(BOLD)"),
+        bright_blue: hex("BLUE(BOLD)"),
+        bright_magenta: hex("MAGENTA(BOLD)"),
+        bright_cyan: hex("CYAN(BOLD)"),
+        bright_white: hex("WHITE(BOLD)"),
+    };
+    if colors == XtermColors::default() {
+        return Err("a [Color Scheme] section with no colours in it".into());
+    }
+    Ok(colors)
 }
 
 /// An `.itermcolors` file is an XML plist whose top-level dict maps a colour
@@ -515,8 +610,26 @@ fn theme_from(label: &str, source: &str, colors: XtermColors) -> ThemeSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::xts::test_support::{archive, cleanup, utf16};
     use std::fs;
     use std::path::PathBuf;
+
+    const SCS: &str = "\
+[Color Scheme]
+text=cdcdcd
+cyan(bold)=00bbbb
+text(bold)=cdcdcd
+magenta=ff55ff
+green=93c863
+background=283033
+red(bold)=a60001
+red=ff0003
+white=ffffff
+blue(bold)=3a9bdb
+black=555555
+blue=a1d7ff
+black(bold)=000000
+";
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -764,6 +877,75 @@ mod tests {
         let panel = Rgb::parse(&ui.panel).unwrap();
         let border = Rgb::parse(&ui.border).unwrap();
         assert!(panel.luminance() > 0.0 && panel.luminance() < border.luminance());
+    }
+
+    #[test]
+    fn reads_an_xshell_scs_scheme() {
+        let colors = parse_scs(SCS).unwrap();
+
+        assert_eq!(colors.background.as_deref(), Some("#283033"));
+        assert_eq!(colors.foreground.as_deref(), Some("#cdcdcd"));
+        assert_eq!(colors.magenta.as_deref(), Some("#ff55ff"));
+        // `(bold)` is Xshell's name for the bright half of the palette.
+        assert_eq!(colors.bright_red.as_deref(), Some("#a60001"));
+        assert_eq!(colors.bright_cyan.as_deref(), Some("#00bbbb"));
+        assert_eq!(colors.yellow, None);
+        assert!(parse_scs("[Keyword_0]\nKeyword=x\n").is_err());
+        assert!(parse_scs("[Color Scheme]\nnothing=here\n").is_err());
+    }
+
+    #[test]
+    fn imports_an_scs_file_written_as_utf16() {
+        let dir = temp_dir("scs");
+        let path = dir.join("Obsidian.scs");
+        fs::write(&path, utf16(SCS)).unwrap();
+
+        let found = import(&path).unwrap();
+        fs::remove_dir_all(dir).ok();
+
+        assert_eq!(found.themes.len(), 1);
+        assert_eq!(found.themes[0].id, "imported.obsidian");
+        assert_eq!(found.themes[0].kind, ThemeKind::Dark);
+        assert_eq!(found.themes[0].xterm.blue.as_deref(), Some("#a1d7ff"));
+    }
+
+    #[test]
+    fn imports_every_scheme_in_a_backup() {
+        let path = archive(
+            "backup.xts",
+            &[
+                ("xsl/ColorScheme Files/Obsidian.scs", utf16(SCS)),
+                (
+                    "xsl/ColorScheme Files/Blank.scs",
+                    utf16("[Color Scheme]\r\n"),
+                ),
+                (
+                    "xsl/ColorScheme Files/ColorInfo.ini",
+                    utf16("[Info]\r\nVersion=6.0\r\n"),
+                ),
+                ("Xshell/jump.xsh", utf16("[CONNECTION]\r\nHost=x\r\n")),
+            ],
+        );
+
+        let found = import(&path).unwrap();
+        cleanup(&path);
+
+        assert_eq!(found.themes.len(), 1);
+        assert_eq!(found.themes[0].label, "Obsidian");
+        assert_eq!(found.themes[0].source.as_deref(), Some("backup.xts"));
+        assert_eq!(found.notes.len(), 1);
+        assert!(found.notes[0].starts_with("Blank.scs:"));
+    }
+
+    #[test]
+    fn a_backup_with_no_schemes_is_an_error() {
+        let path = archive(
+            "empty.xts",
+            &[("Xshell/jump.xsh", utf16("[CONNECTION]\r\nHost=x\r\n"))],
+        );
+        let err = import(&path).unwrap_err();
+        cleanup(&path);
+        assert_eq!(err.code(), "SCHEME_IMPORT_FAILED");
     }
 
     #[test]
