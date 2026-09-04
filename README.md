@@ -11,17 +11,18 @@ no account, no cloud, credentials never leave the machine unencrypted.
 Harbour is an Xshell + Xftp replacement for teams that live on Windows but ship
 to Linux, and it runs the same on macOS and Linux.
 
-> **Status: milestone 8 of 9 - the MVP.** Harbour can now be carried between
-> machines: seal the whole vault into one encrypted file and merge it back
-> elsewhere, protect saved passwords with a master password where there is no
-> system keychain, and run entirely from a folder beside the executable in
-> portable mode. Before this: jump hosts of any depth, port forwarding, a
-> snippet palette, follow-the-shell and self-update from GitHub releases; SFTP
-> and transfers on the shared connection; a finished terminal with splits, find,
-> keymap, highlight rules and logging; SSH with agent, key and password auth,
-> host keys checked against your `known_hosts`, saved hosts with keychain
-> passwords, and imports from `~/.ssh/config` and Xshell backups. See
-> [the roadmap](#roadmap).
+> **Status: milestone 9 of 9.** Beyond the MVP: output **triggers** with desktop
+> notifications, a **fleet runner** that runs one command across many hosts,
+> **serial** and **telnet** session kinds alongside SSH, folder-based vault
+> **sync**, SFTP permissions and a properties dialog, and an end-to-end suite
+> that drives the built app. Milestone 8 made Harbour portable and encrypted - a
+> master password, an encrypted vault you can export, import and sync, and a
+> portable mode beside the executable. Under all of it: jump hosts of any depth,
+> port forwarding, snippets, self-update; SFTP and transfers on the shared
+> connection; a terminal with splits, find, keymap, highlight rules and logging;
+> SSH with agent, key and password auth, host keys checked against your
+> `known_hosts`, and imports from `~/.ssh/config` (with `ProxyJump`) and Xshell
+> backups. See [the roadmap](#roadmap).
 
 ## Requirements
 
@@ -390,8 +391,11 @@ docs/             architecture and the IPC contract
    file for machines without a keychain, encrypted vault export/import to carry
    an estate between machines, and portable mode that keeps everything beside
    the executable. **MVP.** *(done)*
-9. Triggers and notifications, fleet runner, SFTP extras, sync adapters,
-   serial and telnet, E2E tests.
+9. **Beyond the MVP** - output triggers with desktop notifications, a fleet
+   runner (one command across many hosts), SFTP permissions and a properties
+   dialog, folder-based vault sync, serial and telnet session kinds, a private
+   key file picker, `ProxyJump` at import, and an end-to-end test suite that
+   drives the built app. *(done)*
 
 ## Migrating from Xshell
 
