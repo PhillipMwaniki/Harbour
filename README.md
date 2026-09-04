@@ -48,7 +48,14 @@ pnpm test                     # frontend unit tests (vitest)
 pnpm typecheck                # tsc --noEmit
 cargo test --manifest-path src-tauri/Cargo.toml
 pnpm tauri:build              # installers for the current platform
+pnpm test:e2e                 # end-to-end, against the built app (see below)
 ```
+
+The end-to-end tests drive the real, built app through `tauri-driver`. They
+need the debug binary built first (`pnpm tauri build --debug --no-bundle`) and
+`tauri-driver` on the path (`cargo install tauri-driver`); on Linux they also
+need `webkit2gtk-driver` and run under a virtual display (`xvfb-run`). CI runs
+them on Linux on every pull request - `tauri-driver` has no macOS support.
 
 Set `HARBOUR_LOG=harbour_lib=debug` for verbose backend logging. Logs are
 written to the platform app-log directory as well as stderr.

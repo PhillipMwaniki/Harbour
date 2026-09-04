@@ -1,0 +1,63 @@
+# End-to-end tests: drive the real, built app through tauri-driver.
+#
+# These are heavier and slower than the unit and integration suites, so they run
+# on pull requests and on demand rather than on every push. tauri-driver has no
+# macOS support (WKWebView exposes no WebDriver), so this runs on Linux, where
+# WebKitWebDriver does the automation under a virtual display.
+name: E2E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    name: E2E (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libudev-dev \
+            patchelf \
+            build-essential \
+            webkit2gtk-driver \
+            xvfb
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The WebDriver proxy that launches the app and speaks to the webview.
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+
+      # Just the binary - no installers - which is what tauri-driver launches.
+      - name: Build the app (debug)
+        run: pnpm tauri build --debug --no-bundle
+
+      - name: Run the E2E tests
+        run: xvfb-run -a pnpm test:e2e
