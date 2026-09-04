@@ -183,7 +183,9 @@ local shell shows the pane empty rather than the last host's listing.
 
 Both panes navigate the same way: double-click a directory, type a path into
 the bar, go up or home, sort by name, size or date, and show hidden files with
-one toggle. Right-click for new folder, rename and delete; delete asks first.
+one toggle. Right-click for new folder, rename, delete and **Properties** -
+which shows a file's path, size, timestamp and owner, and on the remote side
+lets you change its permission bits with a `chmod` grid. Delete asks first.
 
 **Copying is dragging.** Drag rows from one pane onto the other - or onto a
 directory in it - and they are queued: a file, or a directory and everything

@@ -138,6 +138,7 @@ describe("the context menu", () => {
       "New folder…",
       "Rename…F2",
       "Delete a.txt…Del",
+      "Properties…",
       "RefreshF5",
     ]);
 

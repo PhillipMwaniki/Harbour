@@ -10,6 +10,7 @@ import {
   type SortSpec,
 } from "@/lib/files";
 import type { PaneState } from "@/stores/files";
+import { PropertiesDialog } from "./PropertiesDialog";
 
 export type PaneSide = "remote" | "local";
 
@@ -22,6 +23,8 @@ export interface PaneActions {
   newFolder: (name: string) => void;
   rename: (from: string, to: string) => void;
   remove: (names: string[]) => void;
+  /** Remote files only: set the permission bits of an entry. */
+  chmod?: (name: string, mode: number) => Promise<void>;
 }
 
 interface Props {
@@ -98,6 +101,7 @@ export function FilePane({
   }, [pane.path]);
 
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [propsFor, setPropsFor] = useState<FileEntry | null>(null);
   const rootRef = useRef<HTMLElement | null>(null);
   const anchorRef = useRef<string | null>(null);
   const pressRef = useRef<{ x: number; y: number; names: string[] } | null>(null);
@@ -440,12 +444,32 @@ export function FilePane({
               close={() => setMenu(null)}
             />
           )}
+          {menu.entry && (
+            <MenuItem
+              label="Properties…"
+              onClick={() => setPropsFor(menu.entry)}
+              close={() => setMenu(null)}
+            />
+          )}
           <li className="my-1 border-t border-[var(--hb-border)]" />
           <MenuItem label="Refresh" hint="F5" onClick={onRefresh} close={() => setMenu(null)} />
           <li className="px-3 py-1 text-[var(--hb-fg-muted)]">
             Drag rows onto the {otherSide} pane to copy them.
           </li>
         </ul>
+      )}
+
+      {propsFor && pane.path !== null && (
+        <PropertiesDialog
+          entry={propsFor}
+          directory={pane.path}
+          onChmod={
+            side === "remote" && actions.chmod
+              ? (mode) => actions.chmod!(propsFor.name, mode)
+              : undefined
+          }
+          onClose={() => setPropsFor(null)}
+        />
       )}
     </section>
   );

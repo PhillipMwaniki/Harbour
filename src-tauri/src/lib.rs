@@ -199,6 +199,7 @@ pub fn run() {
             commands::sftp::local_list,
             commands::sftp::sftp_mkdir,
             commands::sftp::sftp_rename,
+            commands::sftp::sftp_chmod,
             commands::sftp::sftp_remove,
             commands::sftp::local_mkdir,
             commands::sftp::local_rename,

@@ -55,6 +55,11 @@ export function sftpRename(sessionId: string, from: string, to: string): Promise
   return invoke("sftp_rename", { sessionId, from, to });
 }
 
+/** Sets the permission bits of a remote file or directory. */
+export function sftpChmod(sessionId: string, path: string, mode: number): Promise<void> {
+  return invoke("sftp_chmod", { sessionId, path, mode });
+}
+
 /** `recursive` is required to remove a directory with anything in it. */
 export function sftpRemove(sessionId: string, path: string, recursive: boolean): Promise<void> {
   return invoke("sftp_remove", { sessionId, path, recursive });

@@ -343,6 +343,7 @@ are included and flagged: showing them is a toggle, not a round trip.
 | --- | --- | --- |
 | `sftp_mkdir` | `sessionId: string`, `path: string` | `void` |
 | `sftp_rename` | `sessionId: string`, `from: string`, `to: string` | `void` |
+| `sftp_chmod` | `sessionId: string`, `path: string`, `mode: number` | `void` |
 | `sftp_remove` | `sessionId: string`, `path: string`, `recursive: boolean` | `void` |
 | `local_mkdir` | `path: string` | `void` |
 | `local_rename` | `from: string`, `to: string` | `void` |
