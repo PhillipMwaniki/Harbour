@@ -107,6 +107,18 @@ pub async fn sftp_rename(
     sftp::rename(&session, &from, &to).await
 }
 
+/// Changes the permission bits of a remote file or directory.
+#[tauri::command]
+pub async fn sftp_chmod(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    mode: u32,
+) -> AppResult<()> {
+    let session = state.connections.sftp(&session_id).await?;
+    sftp::chmod(&session, &path, mode).await
+}
+
 /// `recursive` is required to remove a directory with anything in it. The UI
 /// asks before sending it.
 #[tauri::command]

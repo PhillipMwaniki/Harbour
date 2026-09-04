@@ -1,8 +1,11 @@
+pub mod fleet;
 pub mod forward;
+pub mod serial;
 pub mod session;
 pub mod settings;
 pub mod sftp;
 pub mod shell;
 pub mod ssh;
+pub mod telnet;
 pub mod transfer;
 pub mod vault;

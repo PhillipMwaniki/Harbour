@@ -8,6 +8,7 @@ import {
   localRename,
   sftpHome,
   sftpMkdir,
+  sftpChmod,
   sftpRemove,
   sftpRename,
 } from "@/ipc/files";
@@ -270,6 +271,15 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
             else await localRemove(joinPath(here, name), true);
           }
         }),
+      // Remote only. Awaited by the properties dialog, so its errors surface
+      // there; a success refreshes the pane to show the new bits.
+      chmod:
+        side === "remote" && remoteReady
+          ? async (name, mode) => {
+              await sftpChmod(sessionId!, joinPath(remote.path!, name), mode);
+              void loadRemote(sessionId!);
+            }
+          : undefined,
     };
   };
 

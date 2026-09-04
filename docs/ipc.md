@@ -105,6 +105,31 @@ WSL distribution; elsewhere `$SHELL` followed by the usual suspects.
 | --- | --- | --- |
 | `ssh_connect` | `target: SshTarget`, `methods: AuthChoice[]`, `cols: number`, `rows: number` | `SessionInfo` |
 | `connection_respond` | `promptId: string`, `answer: object` | `void` |
+| `telnet_connect` | `host: string`, `port: number`, `cols: number`, `rows: number` | `SessionInfo` |
+| `serial_ports` | - | `SerialPortInfo[]` |
+| `serial_connect` | `path: string`, `baud: number` | `SessionInfo` |
+
+`telnet_connect` opens a raw TCP telnet session. It has no authentication or
+host key of its own - whatever login the far end wants happens in the terminal -
+so it is a single call with no round trips. The returned `SessionInfo` has
+`kind: "telnet"`, and `session_subscribe` / `session_write` / `session_resize` /
+`session_close` work exactly as for the other kinds. `port` `0` means 23. The
+telnet negotiation (option offers, window size) is handled in the core and never
+reaches the terminal; there is no SFTP or port forwarding on a telnet session.
+
+`serial_ports` lists the serial ports attached now; `serial_connect` opens one
+at `baud` and returns a `SessionInfo` with `kind: "serial"`. A serial line is a
+plain byte pipe: `session_resize` is accepted but does nothing (there is no
+window size), and there is no SFTP or forwarding. `session_close` stops the
+reader and releases the port.
+
+```ts
+type SerialPortInfo = {
+  path: string;            // COM3, /dev/ttyUSB0
+  kind: string;            // "USB" | "Bluetooth" | "PCI" | "Unknown"
+  product?: string;        // a USB device's product string, when it has one
+};
+```
 
 `ssh_connect` resolves only once the session is live. The host key and
 credential round-trips happen *inside* the call, as events, so the frontend has
@@ -157,6 +182,7 @@ id that is no longer waiting - it timed out, or its connection died - returns
 | `secret_store_change_master` | `newMaster: string` | `void` |
 | `secret_store_lock` | - | `void` |
 | `host_connect` | `hostId: string`, `cols: number`, `rows: number` | `SessionInfo` |
+| `fleet_run` | `hostIds: string[]`, `command: string` | `FleetResult[]` |
 
 `vault_tree` returns the whole tree in one call: a few hundred hosts at most,
 so paging it would cost more than it saves.
@@ -255,6 +281,27 @@ same, except that a saved password is taken from the keychain without asking,
 and a `connection:auth_prompt` for a saved host carries `canRemember: true` so
 the answer can be saved.
 
+`fleet_run` runs one command on many saved hosts at once. Each host is a full
+connection - its own jump chain, host-key check and keychain credentials - on
+which the command is `exec`ed (no pty, no shell) and its stdout, stderr and exit
+status collected. It is **non-interactive**: a host whose key is not already
+trusted, or whose password is not saved and whose agent cannot get in, comes
+back with an `error` rather than raising a prompt - so a run across a whole
+estate never blocks on a dialog. At most eight hosts run at once. Results also
+stream back as `fleet:result` events, one per host as it finishes, and the whole
+set is returned when every host is done.
+
+```ts
+type FleetResult = {
+  hostId: string;
+  name: string;
+  exitCode: number | null; // the command's status, or null if it did not run
+  stdout: string;
+  stderr: string;
+  error: string | null;    // set when the host could not be reached or run it
+};
+```
+
 ### Settings
 
 | Command | Arguments | Returns |
@@ -343,6 +390,7 @@ are included and flagged: showing them is a toggle, not a round trip.
 | --- | --- | --- |
 | `sftp_mkdir` | `sessionId: string`, `path: string` | `void` |
 | `sftp_rename` | `sessionId: string`, `from: string`, `to: string` | `void` |
+| `sftp_chmod` | `sessionId: string`, `path: string`, `mode: number` | `void` |
 | `sftp_remove` | `sessionId: string`, `path: string`, `recursive: boolean` | `void` |
 | `local_mkdir` | `path: string` | `void` |
 | `local_rename` | `from: string`, `to: string` | `void` |

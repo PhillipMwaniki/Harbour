@@ -85,6 +85,7 @@ jobs:
             libxdo-dev \
             libssl-dev \
             patchelf \
+            libudev-dev \
             build-essential
 
       - uses: dtolnay/rust-toolchain@stable
@@ -156,6 +157,7 @@ jobs:
             libxdo-dev \
             libssl-dev \
             patchelf \
+            libudev-dev \
             build-essential
 
       - uses: dtolnay/rust-toolchain@stable

@@ -16,6 +16,7 @@ import { HostDialog } from "@/components/vault/HostDialog";
 import { ImportDialog, type ImportSource } from "@/components/vault/ImportDialog";
 import { VaultBackupDialog, type BackupMode } from "@/components/vault/VaultBackupDialog";
 import { MasterPasswordDialog, type MasterMode } from "@/components/vault/MasterPasswordDialog";
+import { FleetDialog } from "@/components/vault/FleetDialog";
 import { SessionTree } from "@/components/vault/SessionTree";
 import { onSessionClosed, sessionClose, shellList } from "@/ipc/session";
 import { connectionRespond, onHostKeyPrompt, onSecretPrompt } from "@/ipc/ssh";
@@ -63,7 +64,8 @@ type Modal =
   | { kind: "host"; host: Host | null }
   | { kind: "import"; source: ImportSource }
   | { kind: "backup"; mode: BackupMode }
-  | { kind: "master"; mode: MasterMode };
+  | { kind: "master"; mode: MasterMode }
+  | { kind: "fleet" };
 
 export default function App() {
   const tabs = useSessions((state) => state.tabs);
@@ -230,11 +232,17 @@ export default function App() {
 
   const startSsh = useCallback((request: ConnectRequest) => {
     setModal({ kind: "none" });
-    useSessions.getState().openTab({
-      kind: "ssh",
-      target: request.target,
-      methods: request.methods,
-    });
+    if (request.protocol === "telnet") {
+      useSessions.getState().openTab({ kind: "telnet", host: request.host, port: request.port });
+    } else if (request.protocol === "serial") {
+      useSessions.getState().openTab({ kind: "serial", path: request.path, baud: request.baud });
+    } else {
+      useSessions.getState().openTab({
+        kind: "ssh",
+        target: request.target,
+        methods: request.methods,
+      });
+    }
   }, []);
 
   const connectHost = useCallback((host: Host) => {
@@ -382,12 +390,16 @@ export default function App() {
   const selected = useVault((state) => state.selected);
   const hostThemes = useSettings((state) => state.settings.hostThemes);
 
-  // The remote pane follows the focused terminal. A local shell has no remote
-  // side, and the dock says so rather than showing the last host's files.
+  // The remote pane follows the focused terminal. Only SSH sessions carry
+  // SFTP; a local shell or a telnet connection has no remote side, and the
+  // dock says so rather than showing the last host's files.
   const activeTab = tabs.find((tab) => tab.tabId === activeTabId);
   const focusedTerminal = activeTab ? activePane(activeTab) : undefined;
   const remoteSession =
-    focusedTerminal && focusedTerminal.target.kind !== "local" ? focusedTerminal.sessionId : null;
+    focusedTerminal &&
+    (focusedTerminal.target.kind === "ssh" || focusedTerminal.target.kind === "host")
+      ? focusedTerminal.sessionId
+      : null;
 
   return (
     <div className="flex h-screen w-screen flex-col bg-[var(--hb-bg)] text-[var(--hb-fg)]">
@@ -492,6 +504,14 @@ export default function App() {
                   Import Xshell
                 </button>
               </div>
+              <button
+                type="button"
+                title="Run one command across many saved hosts"
+                className="rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                onClick={() => setModal({ kind: "fleet" })}
+              >
+                Run on many hosts…
+              </button>
               <div className="flex gap-1">
                 <button
                   type="button"
@@ -612,6 +632,8 @@ export default function App() {
               }}
             />
           )}
+
+          {modal.kind === "fleet" && <FleetDialog onClose={() => setModal({ kind: "none" })} />}
 
           {modal.kind === "master" && (
             <MasterPasswordDialog

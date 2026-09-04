@@ -23,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hostThemes: {},
   keymap: {},
   highlights: [],
+  triggers: [],
   snippets: [],
   logging: {
     directory: null,
@@ -30,6 +31,7 @@ export const DEFAULT_SETTINGS: Settings = {
     autoStart: false,
     nameTemplate: "{title}-{date}.log",
   },
+  sync: { path: null },
 };
 
 export const MIN_FONT_SIZE = 6;

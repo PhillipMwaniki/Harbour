@@ -11,17 +11,18 @@ no account, no cloud, credentials never leave the machine unencrypted.
 Harbour is an Xshell + Xftp replacement for teams that live on Windows but ship
 to Linux, and it runs the same on macOS and Linux.
 
-> **Status: milestone 8 of 9 - the MVP.** Harbour can now be carried between
-> machines: seal the whole vault into one encrypted file and merge it back
-> elsewhere, protect saved passwords with a master password where there is no
-> system keychain, and run entirely from a folder beside the executable in
-> portable mode. Before this: jump hosts of any depth, port forwarding, a
-> snippet palette, follow-the-shell and self-update from GitHub releases; SFTP
-> and transfers on the shared connection; a finished terminal with splits, find,
-> keymap, highlight rules and logging; SSH with agent, key and password auth,
-> host keys checked against your `known_hosts`, saved hosts with keychain
-> passwords, and imports from `~/.ssh/config` and Xshell backups. See
-> [the roadmap](#roadmap).
+> **Status: milestone 9 of 9.** Beyond the MVP: output **triggers** with desktop
+> notifications, a **fleet runner** that runs one command across many hosts,
+> **serial** and **telnet** session kinds alongside SSH, folder-based vault
+> **sync**, SFTP permissions and a properties dialog, and an end-to-end suite
+> that drives the built app. Milestone 8 made Harbour portable and encrypted - a
+> master password, an encrypted vault you can export, import and sync, and a
+> portable mode beside the executable. Under all of it: jump hosts of any depth,
+> port forwarding, snippets, self-update; SFTP and transfers on the shared
+> connection; a terminal with splits, find, keymap, highlight rules and logging;
+> SSH with agent, key and password auth, host keys checked against your
+> `known_hosts`, and imports from `~/.ssh/config` (with `ProxyJump`) and Xshell
+> backups. See [the roadmap](#roadmap).
 
 ## Requirements
 
@@ -48,7 +49,14 @@ pnpm test                     # frontend unit tests (vitest)
 pnpm typecheck                # tsc --noEmit
 cargo test --manifest-path src-tauri/Cargo.toml
 pnpm tauri:build              # installers for the current platform
+pnpm test:e2e                 # end-to-end, against the built app (see below)
 ```
+
+The end-to-end tests drive the real, built app through `tauri-driver`. They
+need the debug binary built first (`pnpm tauri build --debug --no-bundle`) and
+`tauri-driver` on the path (`cargo install tauri-driver`); on Linux they also
+need `webkit2gtk-driver` and run under a virtual display (`xvfb-run`). CI runs
+them on Linux on every pull request - `tauri-driver` has no macOS support.
 
 Set `HARBOUR_LOG=harbour_lib=debug` for verbose backend logging. Logs are
 written to the platform app-log directory as well as stderr.
@@ -65,7 +73,7 @@ else - CI installs each on the distribution it is for before a release goes
 out. On Arch, `harbour-bin` on the AUR repackages the release and `harbour`
 builds it from source.
 
-## Connecting over SSH
+## Connecting over SSH and telnet
 
 **Ctrl+Shift+N**, or *SSH connection…* in the tab-bar menu. Give a host, a
 username and a port; Harbour tries the SSH agent first, then a key file if you
@@ -82,6 +90,18 @@ already trust from a terminal connects without a prompt. An unknown host shows
 its SHA-256 fingerprint and offers to remember it; a changed key shows both
 fingerprints and defaults to rejecting. Harbour never writes to your OpenSSH
 files: keys it learns go to its own `known_hosts` in the app config directory.
+
+The connect dialog has a **SSH / Telnet / Serial** switch. Telnet is a raw TCP
+connection with no encryption and no credentials of its own - pick it for a
+switch console, a BBS or a legacy daemon, give it a host and a port, and
+whatever login the far end wants happens in the terminal. Harbour handles the
+telnet option negotiation and reports the window size; there is no SFTP or port
+forwarding on a telnet session.
+
+**Serial** opens a console straight onto a local port - a router being flashed,
+a microcontroller, anything on a USB-to-serial cable. Pick the port from the
+list (Refresh re-scans) and a baud rate, and you have a terminal on the wire.
+There is no login and no encryption; it is a direct byte pipe.
 
 ## Saved sessions
 
@@ -109,7 +129,10 @@ press Import.
 
 **OpenSSH** reads `~/.ssh/config`, following `Include` directives, and applies
 `ssh`'s own rules - first value wins, and wildcard `Host` blocks contribute
-defaults rather than becoming hosts of their own.
+defaults rather than becoming hosts of their own. A host's `ProxyJump` is
+carried across too: if the bastion it names is imported in the same pass, the
+host arrives already wired to tunnel through it, exactly as it would over
+`ssh -J`.
 
 **Xshell** reads a `.xts` backup - the file *Tools › Backup* writes, which is
 what most people actually have - or a directory of exported `.xsh` files,
@@ -138,6 +161,15 @@ set it once, enter it when Harbour starts (or skip, and be asked per host), and
 can change it from the session-manager footer. The master password is held in
 memory only while unlocked and wiped when Harbour closes; the file on disk is
 never anything but ciphertext.
+
+**Sync** (Settings › Sync) keeps the vault in step across your machines through
+a folder something else already syncs - Dropbox, OneDrive, iCloud. Point it at a
+file in that folder, and **Push** writes an encrypted copy of the whole vault
+there while **Pull** merges it back on another machine. It is the encrypted
+export and import with the path remembered and one click either way; the
+passphrase is the only thing that opens the file and is never stored. Pull
+merges rather than replaces, so run it once per machine to bring another's hosts
+across.
 
 **Portable mode** keeps everything - vault, settings, logs, known hosts, and the
 master-password secret file - in a `data` folder beside the executable instead
@@ -180,7 +212,9 @@ local shell shows the pane empty rather than the last host's listing.
 
 Both panes navigate the same way: double-click a directory, type a path into
 the bar, go up or home, sort by name, size or date, and show hidden files with
-one toggle. Right-click for new folder, rename and delete; delete asks first.
+one toggle. Right-click for new folder, rename, delete and **Properties** -
+which shows a file's path, size, timestamp and owner, and on the remote side
+lets you change its permission bits with a `chmod` grid. Delete asks first.
 
 **Copying is dragging.** Drag rows from one pane onto the other - or onto a
 directory in it - and they are queued: a file, or a directory and everything
@@ -227,6 +261,29 @@ are not interrupted.
 The file panes can **follow the shell**: the Follow toggle makes the pane track
 the directory the focused terminal reports over OSC 7, remote or local. The
 shell has to emit OSC 7 (most modern bash/zsh setups can be configured to).
+
+## Running on many hosts
+
+**Run on many hosts…** at the foot of the sidebar opens the fleet runner: tick
+the saved hosts you want, type a command, and it is run on each at once - as a
+one-shot `exec`, not a shell - with the output collected. Results fill in one
+host at a time as each finishes, colour-coded by exit status, and clicking a row
+shows its output. The run is non-interactive by design: a host whose key you
+have not trusted yet, or whose password is not saved, comes back as an error
+rather than stopping to ask, so a command across the whole estate is something
+you can start and walk away from. Up to eight hosts run at a time, and jump
+hosts are followed exactly as they are for an interactive connection.
+
+## Triggers
+
+Under Settings › Triggers, a **trigger** watches a session's output for a
+regular expression and acts the moment it appears: a desktop **notification**
+(so you can leave a long build and be told when it prints `BUILD SUCCESSFUL`),
+a **bell**, or **send** text back to the session - a canned `y⏎` for a prompt
+you always answer the same way. Matching runs a line at a time on the streaming
+output, with escape sequences stripped first, so a pattern matches what you see
+rather than the raw colour codes. Triggers are per-pattern, not per-host, and
+apply to every session.
 
 ## Updating
 
@@ -329,14 +386,16 @@ docs/             architecture and the IPC contract
    open-in-editor. *(done)*
 7. **Port forwarding, jump hosts, snippets, follow-cwd** - local forwards,
    bastions of any depth, a snippet palette, follow-the-shell, and a
-   multi-line paste confirmation. Self-update from GitHub releases. *(done;
-   reading `ProxyJump` from `~/.ssh/config` at import is a follow-up.)*
+   multi-line paste confirmation. Self-update from GitHub releases. *(done)*
 8. **Portable, encrypted, movable** - a master password and an encrypted secret
    file for machines without a keychain, encrypted vault export/import to carry
    an estate between machines, and portable mode that keeps everything beside
    the executable. **MVP.** *(done)*
-9. Triggers and notifications, fleet runner, SFTP extras, sync adapters,
-   serial and telnet, E2E tests.
+9. **Beyond the MVP** - output triggers with desktop notifications, a fleet
+   runner (one command across many hosts), SFTP permissions and a properties
+   dialog, folder-based vault sync, serial and telnet session kinds, a private
+   key file picker, `ProxyJump` at import, and an end-to-end test suite that
+   drives the built app. *(done)*
 
 ## Migrating from Xshell
 

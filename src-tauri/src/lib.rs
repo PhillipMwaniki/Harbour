@@ -6,10 +6,12 @@ pub mod files;
 pub mod glob;
 pub mod portable;
 pub mod prompt;
+pub mod serial;
 pub mod session;
 pub mod settings;
 pub mod ssh;
 pub mod telemetry;
+pub mod telnet;
 pub mod text;
 pub mod transfer;
 pub mod vault;
@@ -69,6 +71,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // Portable mode keeps everything beside the executable; otherwise
@@ -161,6 +165,9 @@ pub fn run() {
             commands::shell::shell_list,
             commands::ssh::ssh_connect,
             commands::ssh::connection_respond,
+            commands::telnet::telnet_connect,
+            commands::serial::serial_ports,
+            commands::serial::serial_connect,
             commands::vault::vault_tree,
             commands::vault::vault_create_folder,
             commands::vault::vault_rename_folder,
@@ -183,6 +190,7 @@ pub fn run() {
             commands::vault::secret_store_change_master,
             commands::vault::secret_store_lock,
             commands::vault::host_connect,
+            commands::fleet::fleet_run,
             commands::settings::settings_load,
             commands::settings::settings_save,
             commands::settings::settings_reload,
@@ -197,6 +205,7 @@ pub fn run() {
             commands::sftp::local_list,
             commands::sftp::sftp_mkdir,
             commands::sftp::sftp_rename,
+            commands::sftp::sftp_chmod,
             commands::sftp::sftp_remove,
             commands::sftp::local_mkdir,
             commands::sftp::local_rename,

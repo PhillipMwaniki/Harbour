@@ -5,11 +5,13 @@
 //! that quietly drops a third of someone's estate, or files it under the wrong
 //! username, is worse than one that refuses to start.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppResult;
 use crate::ssh::known_hosts::{self, KnownHosts, Verdict};
-use crate::vault::model::{HostAuth, HostInput};
+use crate::vault::model::{HostAuth, HostId, HostInput};
 use crate::vault::ssh_config::ConfigImport;
 use crate::vault::store::Vault;
 use crate::vault::xshell::{ImportReport, Protocol};
@@ -32,6 +34,12 @@ pub struct Candidate {
     /// across - see the note in [`crate::vault::xshell`] - so this only means
     /// "ask for one on first connect".
     pub uses_password: bool,
+    /// The name of another candidate this one reaches through - a bastion, from
+    /// an `ssh_config` `ProxyJump`. Wired up after import if that host is
+    /// imported too; a jump to a host that is not brought across leaves this one
+    /// direct.
+    #[serde(default)]
+    pub jump_alias: Option<String>,
     /// Set when the entry cannot be imported, saying why. The UI shows these
     /// greyed out rather than hiding them, so nothing disappears unexplained.
     pub skip_reason: Option<String>,
@@ -159,6 +167,11 @@ pub fn from_ssh_config(import: ConfigImport, source: String) -> Preview {
             // guessing "no" would leave the host unconnectable for anyone
             // without a key.
             uses_password: true,
+            jump_alias: host
+                .proxy_jump
+                .as_deref()
+                .and_then(immediate_jump_alias)
+                .map(str::to_string),
             skip_reason: None,
         })
         .collect();
@@ -195,6 +208,8 @@ pub fn from_xshell(report: ImportReport, source: String) -> Preview {
                 // file; the name is preserved as a hint.
                 key_path: None,
                 uses_password: host.has_stored_password,
+                // Xshell models bastions differently; nothing to wire here.
+                jump_alias: None,
                 skip_reason,
             }
         })
@@ -224,10 +239,33 @@ pub struct Applied {
     pub host_keys: usize,
 }
 
+/// The host part of the bastion an `ssh_config` `ProxyJump` names.
+///
+/// A jump is `[user@]host[:port]`, and a chain is those comma-separated, first
+/// visited first - so the bastion directly in front of this host, the one its
+/// `jump_host_id` should point at, is the last entry. Only the host part is an
+/// alias we could have imported; the user and port belong to that host's own
+/// block.
+fn immediate_jump_alias(proxy_jump: &str) -> Option<&str> {
+    let last = proxy_jump
+        .rsplit(',')
+        .map(str::trim)
+        .find(|hop| !hop.is_empty())?;
+    // Strip a leading `user@` and a trailing `:port`.
+    let after_user = last.rsplit_once('@').map(|(_, host)| host).unwrap_or(last);
+    let host = after_user
+        .split_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(after_user);
+    Some(host).filter(|host| !host.is_empty())
+}
+
 /// Writes the chosen candidates into the vault, creating folders as needed.
 ///
 /// `fallback_username` fills in for entries whose source did not name one;
-/// without it those are skipped rather than imported under a guess.
+/// without it those are skipped rather than imported under a guess. Any
+/// `ProxyJump` links are wired once every host exists, so the order candidates
+/// arrive in does not matter.
 pub fn apply(
     vault: &Vault,
     candidates: &[Candidate],
@@ -237,6 +275,10 @@ pub fn apply(
         .map(str::trim)
         .filter(|name| !name.is_empty());
     let mut applied = Applied::default();
+    // What was created, so ProxyJump can be resolved against imported hosts
+    // rather than guessed at. The input is kept to re-issue it with the jump.
+    let mut created: Vec<(HostId, HostInput, Option<String>)> = Vec::new();
+    let mut by_name: HashMap<String, HostId> = HashMap::new();
 
     for candidate in candidates {
         let Some(username) = candidate
@@ -256,7 +298,7 @@ pub fn apply(
         }
 
         let folder_id = vault.ensure_folder_path(&candidate.folder)?;
-        vault.create_host(HostInput {
+        let input = HostInput {
             folder_id,
             name: candidate.name.clone(),
             hostname: candidate.hostname.clone(),
@@ -271,8 +313,27 @@ pub fn apply(
                 use_password: candidate.uses_password,
             },
             jump_host_id: None,
-        })?;
+        };
+        let host = vault.create_host(input.clone())?;
+        by_name.insert(candidate.name.clone(), host.id.clone());
+        created.push((host.id, input, candidate.jump_alias.clone()));
         applied.hosts += 1;
+    }
+
+    // Second pass: point each imported host at the imported bastion it named. A
+    // jump to a host that was not brought across leaves this one direct, the
+    // same safe direction the connect path errs in.
+    for (id, input, jump_alias) in &created {
+        let Some(alias) = jump_alias else { continue };
+        let Some(jump_id) = by_name.get(alias) else {
+            continue;
+        };
+        if jump_id == id {
+            continue;
+        }
+        let mut with_jump = input.clone();
+        with_jump.jump_host_id = Some(jump_id.clone());
+        vault.update_host(id, with_jump)?;
     }
 
     Ok(applied)
@@ -322,8 +383,72 @@ mod tests {
             description: None,
             key_path: None,
             uses_password: true,
+            jump_alias: None,
             skip_reason: None,
         }
+    }
+
+    #[test]
+    fn immediate_jump_alias_takes_the_host_of_the_last_hop() {
+        assert_eq!(immediate_jump_alias("bastion"), Some("bastion"));
+        assert_eq!(immediate_jump_alias("jump@bastion:2222"), Some("bastion"));
+        // A chain: the hop closest to the target is the last one.
+        assert_eq!(immediate_jump_alias("outer,inner"), Some("inner"));
+        assert_eq!(
+            immediate_jump_alias("  outer , me@inner:22 "),
+            Some("inner")
+        );
+        assert_eq!(immediate_jump_alias(""), None);
+    }
+
+    #[test]
+    fn a_proxy_jump_becomes_a_candidate_jump_alias() {
+        let import = ssh_config::parse(
+            "Host bastion\n  HostName bastion.example.com\n  User jump\n\n\
+             Host internal\n  HostName 10.0.0.5\n  User deploy\n  ProxyJump bastion\n",
+        );
+        let preview = from_ssh_config(import, "~/.ssh/config".into());
+        let internal = preview
+            .candidates
+            .iter()
+            .find(|c| c.name == "internal")
+            .unwrap();
+        assert_eq!(internal.jump_alias.as_deref(), Some("bastion"));
+    }
+
+    #[test]
+    fn applying_wires_a_proxy_jump_to_the_imported_bastion() {
+        let vault = Vault::in_memory().unwrap();
+        let bastion = candidate("bastion", Some("jump"));
+        let mut internal = candidate("internal", Some("deploy"));
+        internal.jump_alias = Some("bastion".into());
+
+        // Order deliberately puts the host before its bastion, to prove the
+        // wiring does not depend on arrival order.
+        let applied = apply(&vault, &[internal, bastion], None).unwrap();
+        assert_eq!(applied.hosts, 2);
+
+        let tree = vault.tree().unwrap();
+        let bastion_id = tree
+            .hosts
+            .iter()
+            .find(|h| h.name == "bastion")
+            .unwrap()
+            .id
+            .clone();
+        let internal = tree.hosts.iter().find(|h| h.name == "internal").unwrap();
+        assert_eq!(internal.jump_host_id.as_deref(), Some(bastion_id.as_str()));
+    }
+
+    #[test]
+    fn a_jump_to_a_host_that_was_not_imported_is_left_direct() {
+        let vault = Vault::in_memory().unwrap();
+        let mut internal = candidate("internal", Some("deploy"));
+        internal.jump_alias = Some("bastion-not-imported".into());
+
+        let applied = apply(&vault, &[internal], None).unwrap();
+        assert_eq!(applied.hosts, 1);
+        assert_eq!(vault.tree().unwrap().hosts[0].jump_host_id, None);
     }
 
     #[test]

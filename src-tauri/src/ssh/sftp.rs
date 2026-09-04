@@ -130,6 +130,19 @@ pub async fn rename(sftp: &SftpSession, from: &str, to: &str) -> AppResult<()> {
         .map_err(|err| path_error(from, err))
 }
 
+/// Sets the permission bits on `path`, leaving everything else untouched. Only
+/// the low twelve bits (the `rwx` triples plus setuid/setgid/sticky) are set;
+/// the file type bits are the server's to keep.
+pub async fn chmod(sftp: &SftpSession, path: &str, mode: u32) -> AppResult<()> {
+    let attrs = russh_sftp::protocol::FileAttributes {
+        permissions: Some(mode & 0o7777),
+        ..Default::default()
+    };
+    sftp.set_metadata(path, attrs)
+        .await
+        .map_err(|err| path_error(path, err))
+}
+
 /// Removes a file, an empty directory, or - with `recursive` - a directory
 /// and everything under it. Symlinks are removed as links, never followed:
 /// deleting a linked directory must not empty the directory it points at.

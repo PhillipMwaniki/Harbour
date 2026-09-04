@@ -27,6 +27,7 @@ function candidate(name: string, overrides: Partial<ImportCandidate> = {}): Impo
     description: null,
     keyPath: null,
     usesPassword: true,
+    jumpAlias: null,
     skipReason: null,
     ...overrides,
   };

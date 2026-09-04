@@ -5,7 +5,7 @@
  * and in `docs/ipc.md` in the same commit.
  */
 
-export type SessionKind = "local" | "ssh";
+export type SessionKind = "local" | "ssh" | "telnet" | "serial";
 
 export interface SessionInfo {
   sessionId: string;
@@ -168,6 +168,12 @@ export interface ImportCandidate {
   description: string | null;
   keyPath: string | null;
   usesPassword: boolean;
+  /**
+   * The name of another candidate this one reaches through - a bastion, from an
+   * `ssh_config` `ProxyJump`. Wired up after import when that host is imported
+   * too; `null` for a direct host.
+   */
+  jumpAlias: string | null;
   /** Set when it cannot be imported, saying why. */
   skipReason: string | null;
 }
@@ -202,6 +208,18 @@ export interface ImportResult {
   skipped: number;
   /** Host keys written to Harbour's `known_hosts`. */
   hostKeys: number;
+}
+
+/** What running a fleet command on one host produced. */
+export interface FleetResult {
+  hostId: string;
+  name: string;
+  /** The command's exit status, when it ran; `null` when it did not. */
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  /** Set when the host could not be reached, authenticated, or run the command. */
+  error: string | null;
 }
 
 /** What a sealed-vault import added. Everything here is new; nothing was replaced. */
@@ -291,6 +309,23 @@ export interface HighlightRule {
   enabled: boolean;
 }
 
+/** What a trigger does when its pattern appears in a session's output. */
+export type TriggerAction =
+  | { kind: "notify" }
+  | { kind: "bell" }
+  | { kind: "send"; text: string };
+
+/** One output trigger: a watched pattern, and what to do when it appears. */
+export interface Trigger {
+  id: string;
+  label: string;
+  /** A regular expression source, without delimiters or flags. */
+  pattern: string;
+  caseSensitive: boolean;
+  enabled: boolean;
+  action: TriggerAction;
+}
+
 /** `raw` keeps the escape sequences; `plain` reads like the screen did. */
 export type LogFormat = "raw" | "plain";
 
@@ -324,8 +359,16 @@ export interface Settings {
   /** Action id -> chords. Absent means the built-in binding; `[]` unbinds. */
   keymap: Record<string, string[]>;
   highlights: HighlightRule[];
+  triggers: Trigger[];
   snippets: Snippet[];
   logging: LoggingSettings;
+  sync: SyncSettings;
+}
+
+/** Where an encrypted copy of the vault is pushed to and pulled from. */
+export interface SyncSettings {
+  /** A file in a synced folder (Dropbox, OneDrive, iCloud). `null` until set. */
+  path: string | null;
 }
 
 /** What a colour scheme import found. Nothing is saved until the user says. */

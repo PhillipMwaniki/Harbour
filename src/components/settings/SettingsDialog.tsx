@@ -1,8 +1,18 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { pickOpenFile, pickSavePath } from "@/ipc/dialog";
 import { highlightImport, logFileName, themeImport } from "@/ipc/settings";
-import { errorMessage, type HighlightRule, type LogFormat, type ThemeSpec } from "@/ipc/types";
+import { exportVault, importVault } from "@/ipc/vault";
+import {
+  errorMessage,
+  type HighlightRule,
+  type LogFormat,
+  type ThemeSpec,
+  type Trigger,
+  type TriggerAction,
+} from "@/ipc/types";
 import { compileRules, newRuleId } from "@/lib/highlight";
+import { compileTriggers } from "@/lib/triggers";
 import {
   actions,
   chordFromEvent,
@@ -14,15 +24,25 @@ import {
 } from "@/lib/keymap";
 import { allThemes } from "@/lib/themes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, useSettings } from "@/stores/settings";
+import { useVault } from "@/stores/vault";
 
-type Section = "appearance" | "keyboard" | "highlights" | "snippets" | "logging";
+type Section =
+  | "appearance"
+  | "keyboard"
+  | "highlights"
+  | "triggers"
+  | "snippets"
+  | "logging"
+  | "sync";
 
 const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "keyboard", label: "Keyboard" },
   { id: "highlights", label: "Highlights" },
+  { id: "triggers", label: "Triggers" },
   { id: "snippets", label: "Snippets" },
   { id: "logging", label: "Logging" },
+  { id: "sync", label: "Sync" },
 ];
 
 const inputClass =
@@ -92,8 +112,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           {section === "appearance" && <Appearance />}
           {section === "keyboard" && <Keyboard />}
           {section === "highlights" && <Highlights />}
+          {section === "triggers" && <Triggers />}
           {section === "snippets" && <Snippets />}
           {section === "logging" && <Logging />}
+          {section === "sync" && <Sync />}
         </div>
 
         <p className="border-t border-[var(--hb-border)] px-3 py-1.5 text-[var(--hb-fg-muted)]">
@@ -618,6 +640,162 @@ function Highlights() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Triggers
+// ---------------------------------------------------------------------------
+
+function Triggers() {
+  const triggers = useSettings((state) => state.settings.triggers);
+  const update = useSettings((state) => state.update);
+  const errors = useMemo(() => compileTriggers(triggers).errors, [triggers]);
+
+  const change = (id: string, patch: Partial<Trigger>) =>
+    void update((current) => ({
+      ...current,
+      triggers: current.triggers.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+    }));
+
+  const remove = (id: string) =>
+    void update((current) => ({
+      ...current,
+      triggers: current.triggers.filter((t) => t.id !== id),
+    }));
+
+  const add = () =>
+    void update((current) => ({
+      ...current,
+      triggers: [
+        ...current.triggers,
+        {
+          id: newRuleId(),
+          label: "New trigger",
+          pattern: "",
+          caseSensitive: false,
+          enabled: true,
+          action: { kind: "notify" } as TriggerAction,
+        },
+      ],
+    }));
+
+  return (
+    <div>
+      <p className="mb-2 text-[var(--hb-fg-muted)]">
+        Watch a session&apos;s output for a pattern and act when it appears - notify you, ring the
+        bell, or send a reply. Patterns are regular expressions, matched a line at a time on the
+        output as it streams.
+      </p>
+
+      <div className="space-y-2">
+        {triggers.length === 0 && <p className="text-[var(--hb-fg-muted)]">No triggers yet.</p>}
+
+        {triggers.map((t) => (
+          <div key={t.id} className="rounded border border-[var(--hb-border)] p-2">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                aria-label={`Enable ${t.label}`}
+                checked={t.enabled}
+                onChange={(event) => change(t.id, { enabled: event.target.checked })}
+              />
+              <input
+                aria-label="Trigger name"
+                className="w-40 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
+                value={t.label}
+                onChange={(event) => change(t.id, { label: event.target.value })}
+              />
+              <input
+                aria-label="Pattern"
+                className="flex-1 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 font-mono"
+                value={t.pattern}
+                placeholder="BUILD SUCCESSFUL"
+                onChange={(event) => change(t.id, { pattern: event.target.value })}
+              />
+              <button
+                type="button"
+                aria-label={`Delete ${t.label}`}
+                className="rounded px-2 py-1 text-[var(--hb-fg-muted)] hover:bg-[var(--hb-hover)] hover:text-[var(--hb-fg)]"
+                onClick={() => remove(t.id)}
+              >
+                &minus;
+              </button>
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={t.caseSensitive}
+                  onChange={(event) => change(t.id, { caseSensitive: event.target.checked })}
+                />
+                Match case
+              </label>
+
+              <ActionField action={t.action} onChange={(action) => change(t.id, { action })} />
+            </div>
+
+            {errors[t.id] && (
+              <p role="alert" className="mt-2 text-[var(--hb-danger)]">
+                {errors[t.id]}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={add}
+        className="mt-3 rounded border border-[var(--hb-border)] px-3 py-1 hover:bg-[var(--hb-hover)]"
+      >
+        Add a trigger
+      </button>
+    </div>
+  );
+}
+
+/** The action dropdown, plus a text box when the action is "send". */
+function ActionField({
+  action,
+  onChange,
+}: {
+  action: TriggerAction;
+  onChange: (action: TriggerAction) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[var(--hb-fg-muted)]">Do</span>
+      <select
+        aria-label="Action"
+        className="rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
+        value={action.kind}
+        onChange={(event) => {
+          const kind = event.target.value as TriggerAction["kind"];
+          onChange(kind === "send" ? { kind: "send", text: "" } : { kind });
+        }}
+      >
+        <option value="notify">Notify me</option>
+        <option value="bell">Ring the bell</option>
+        <option value="send">Send text</option>
+      </select>
+      {action.kind === "send" && (
+        <input
+          aria-label="Text to send"
+          className="w-48 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 font-mono"
+          value={action.text}
+          placeholder="y\n"
+          onChange={(event) => onChange({ kind: "send", text: unescapeText(event.target.value) })}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Lets a user type `\n` and `\t` in the send box and have them mean the
+ * control characters, since a real newline cannot be typed into an input. */
+function unescapeText(value: string): string {
+  return value.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r");
+}
+
 /**
  * Importing Xshell highlight sets. Same shape as the scheme importer: show
  * everything the file held, keep only what is ticked.
@@ -929,6 +1107,166 @@ function Logging() {
           Log every session from the moment it opens
         </label>
       </Section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sync
+// ---------------------------------------------------------------------------
+
+/**
+ * Keep the vault in step across machines through a folder something else syncs
+ * (Dropbox, OneDrive, iCloud). Push writes an encrypted copy of the whole vault
+ * to the file; Pull merges that file back in. It is the encrypted export and
+ * import, with the path remembered and one click either way.
+ */
+function Sync() {
+  const path = useSettings((state) => state.settings.sync.path);
+  const update = useSettings((state) => state.update);
+  const [passphrase, setPassphrase] = useState("");
+  const [includeSecrets, setIncludeSecrets] = useState(true);
+  const [busy, setBusy] = useState<"push" | "pull" | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const setPath = (next: string | null) =>
+    void update((current) => ({ ...current, sync: { ...current.sync, path: next } }));
+
+  const ready = (path ?? "").trim() !== "" && passphrase !== "" && busy === null;
+
+  const choose = async () => {
+    const chosen = await pickSavePath("Choose a sync file", "harbour-vault.hbx");
+    if (chosen) setPath(chosen);
+  };
+
+  const chooseExisting = async () => {
+    const chosen = await pickOpenFile("Choose the sync file", path ?? undefined);
+    if (chosen) setPath(chosen);
+  };
+
+  const push = async () => {
+    if (!ready || !path) return;
+    setBusy("push");
+    setError(null);
+    setStatus(null);
+    try {
+      await exportVault(path.trim(), passphrase, includeSecrets);
+      setStatus(
+        includeSecrets ? "Pushed the vault, saved passwords included." : "Pushed the vault.",
+      );
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pull = async () => {
+    if (!ready || !path) return;
+    setBusy("pull");
+    setError(null);
+    setStatus(null);
+    try {
+      const summary = await importVault(path.trim(), passphrase);
+      setStatus(
+        `Pulled ${summary.hosts} host${summary.hosts === 1 ? "" : "s"}` +
+          (summary.secrets > 0 ? `, ${summary.secrets} secret${summary.secrets === 1 ? "" : "s"}.` : "."),
+      );
+      void useVault.getState().refresh();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div>
+      <p className="mb-3 text-[var(--hb-fg-muted)]">
+        Keep the vault in step across machines through a folder something else syncs. Push writes
+        an encrypted copy of the whole vault to the file; Pull merges it back in. The passphrase is
+        the only thing that opens the file - it is not stored.
+      </p>
+
+      <label className="mb-1 block" htmlFor="sync-path">
+        Sync file
+      </label>
+      <div className="mb-3 flex gap-2">
+        <input
+          id="sync-path"
+          value={path ?? ""}
+          onChange={(event) => setPath(event.target.value || null)}
+          placeholder="C:\Users\you\Dropbox\harbour-vault.hbx"
+          className="w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
+        />
+        <button
+          type="button"
+          onClick={() => void choose()}
+          className="shrink-0 rounded border border-[var(--hb-border)] px-2 py-1 hover:bg-[var(--hb-hover)]"
+        >
+          New…
+        </button>
+        <button
+          type="button"
+          onClick={() => void chooseExisting()}
+          className="shrink-0 rounded border border-[var(--hb-border)] px-2 py-1 hover:bg-[var(--hb-hover)]"
+        >
+          Existing…
+        </button>
+      </div>
+
+      <label className="mb-1 block" htmlFor="sync-passphrase">
+        Passphrase
+      </label>
+      <input
+        id="sync-passphrase"
+        type="password"
+        value={passphrase}
+        autoComplete="off"
+        onChange={(event) => setPassphrase(event.target.value)}
+        className="mb-3 w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
+      />
+
+      <label className="mb-3 flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={includeSecrets}
+          onChange={(event) => setIncludeSecrets(event.target.checked)}
+        />
+        Include saved passwords when pushing
+      </label>
+
+      {error && (
+        <p role="alert" className="mb-2 text-[var(--hb-danger)]">
+          {error}
+        </p>
+      )}
+      {status && !error && <p className="mb-2 text-[var(--hb-fg-muted)]">{status}</p>}
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() => void push()}
+          className="rounded bg-[var(--hb-accent)] px-3 py-1 text-[var(--hb-bg)] disabled:opacity-50"
+        >
+          {busy === "push" ? "Pushing…" : "Push"}
+        </button>
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() => void pull()}
+          className="rounded border border-[var(--hb-border)] px-3 py-1 hover:bg-[var(--hb-hover)] disabled:opacity-50"
+        >
+          {busy === "pull" ? "Pulling…" : "Pull"}
+        </button>
+      </div>
+
+      <p className="mt-3 text-[var(--hb-fg-muted)]">
+        Pull <em>merges</em>: it adds what is in the file alongside your saved hosts rather than
+        replacing them, so pull once per machine to bring another&apos;s hosts across.
+      </p>
     </div>
   );
 }

@@ -301,6 +301,9 @@ function CandidateRow({
       <span className="truncate">
         <span className="text-[var(--hb-fg-muted)]">{where}</span>
         {candidate.name}
+        {candidate.jumpAlias && (
+          <span className="text-[var(--hb-fg-muted)]"> · via {candidate.jumpAlias}</span>
+        )}
       </span>
       <span className="ml-auto truncate text-[var(--hb-fg-muted)]">
         {blocked ? candidate.skipReason : `${candidate.username ?? "?"}@${target}`}

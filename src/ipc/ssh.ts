@@ -36,6 +36,38 @@ export function sshConnect(args: SshConnectArgs): Promise<SessionInfo> {
   });
 }
 
+/**
+ * Opens a telnet session. Telnet has no authentication or host key of its own,
+ * so this is a single call - whatever login the far end wants happens in the
+ * terminal.
+ */
+export function telnetConnect(
+  host: string,
+  port: number,
+  cols: number,
+  rows: number,
+): Promise<SessionInfo> {
+  return invoke<SessionInfo>("telnet_connect", { host, port, cols, rows });
+}
+
+/** One serial port the machine has, for the connect dialog to offer. */
+export interface SerialPortInfo {
+  path: string;
+  /** "USB", "Bluetooth", "PCI" or "Unknown". */
+  kind: string;
+  product?: string;
+}
+
+/** Lists the serial ports currently attached. */
+export function serialPorts(): Promise<SerialPortInfo[]> {
+  return invoke<SerialPortInfo[]>("serial_ports");
+}
+
+/** Opens a serial console on `path` at `baud`. */
+export function serialConnect(path: string, baud: number): Promise<SessionInfo> {
+  return invoke<SessionInfo>("serial_connect", { path, baud });
+}
+
 /** Answers a prompt raised during a connection attempt. */
 export function connectionRespond(
   promptId: string,
