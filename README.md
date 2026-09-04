@@ -109,7 +109,10 @@ press Import.
 
 **OpenSSH** reads `~/.ssh/config`, following `Include` directives, and applies
 `ssh`'s own rules - first value wins, and wildcard `Host` blocks contribute
-defaults rather than becoming hosts of their own.
+defaults rather than becoming hosts of their own. A host's `ProxyJump` is
+carried across too: if the bastion it names is imported in the same pass, the
+host arrives already wired to tunnel through it, exactly as it would over
+`ssh -J`.
 
 **Xshell** reads a `.xts` backup - the file *Tools › Backup* writes, which is
 what most people actually have - or a directory of exported `.xsh` files,
@@ -329,8 +332,7 @@ docs/             architecture and the IPC contract
    open-in-editor. *(done)*
 7. **Port forwarding, jump hosts, snippets, follow-cwd** - local forwards,
    bastions of any depth, a snippet palette, follow-the-shell, and a
-   multi-line paste confirmation. Self-update from GitHub releases. *(done;
-   reading `ProxyJump` from `~/.ssh/config` at import is a follow-up.)*
+   multi-line paste confirmation. Self-update from GitHub releases. *(done)*
 8. **Portable, encrypted, movable** - a master password and an encrypted secret
    file for machines without a keychain, encrypted vault export/import to carry
    an estate between machines, and portable mode that keeps everything beside

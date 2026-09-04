@@ -168,6 +168,12 @@ export interface ImportCandidate {
   description: string | null;
   keyPath: string | null;
   usesPassword: boolean;
+  /**
+   * The name of another candidate this one reaches through - a bastion, from an
+   * `ssh_config` `ProxyJump`. Wired up after import when that host is imported
+   * too; `null` for a direct host.
+   */
+  jumpAlias: string | null;
   /** Set when it cannot be imported, saying why. */
   skipReason: string | null;
 }

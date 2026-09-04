@@ -35,6 +35,10 @@ pub struct ConfigHost {
     pub user: Option<String>,
     /// The first `IdentityFile`, if the block names one.
     pub identity_file: Option<String>,
+    /// The raw `ProxyJump` value, if the block has one and it is not `none`.
+    /// A comma-separated chain is kept whole; the immediate bastion (the hop
+    /// closest to this host) is the last entry, and the importer resolves it.
+    pub proxy_jump: Option<String>,
 }
 
 /// What a parse produced, and what it could not do.
@@ -197,6 +201,10 @@ fn resolve(blocks: &[Block]) -> Vec<ConfigHost> {
                     .unwrap_or(22),
                 user: setting("user"),
                 identity_file: setting("identityfile"),
+                // `ProxyJump none` is ssh's way to cancel an inherited jump, so
+                // it means "direct", not a bastion called "none".
+                proxy_jump: setting("proxyjump")
+                    .filter(|value| !value.eq_ignore_ascii_case("none")),
                 alias: alias.to_string(),
             })
         })
@@ -440,6 +448,43 @@ mod tests {
     fn a_config_with_no_hosts_yields_nothing() {
         assert!(parse("").hosts.is_empty());
         assert!(parse("# only comments\n").hosts.is_empty());
+    }
+
+    #[test]
+    fn a_proxy_jump_is_read() {
+        let import = parse("Host internal\n  HostName 10.0.0.5\n  ProxyJump bastion\n");
+        assert_eq!(
+            host(&import, "internal").proxy_jump.as_deref(),
+            Some("bastion")
+        );
+    }
+
+    #[test]
+    fn a_host_without_a_jump_has_none() {
+        let import = parse("Host web\n  HostName web.example.com\n");
+        assert_eq!(host(&import, "web").proxy_jump, None);
+    }
+
+    /// `ProxyJump none` cancels an inherited jump; it is not a host called
+    /// "none". As ever, first value wins, so the specific block must precede
+    /// the wildcard for the cancel to take.
+    #[test]
+    fn proxy_jump_none_means_direct() {
+        let import = parse(
+            "Host direct\n  HostName d.example.com\n  ProxyJump none\n\nHost *\n  ProxyJump bastion\n",
+        );
+        assert_eq!(host(&import, "direct").proxy_jump, None);
+    }
+
+    #[test]
+    fn a_wildcard_block_can_supply_a_proxy_jump() {
+        let import = parse(
+            "Host *.internal\n  ProxyJump bastion\n\nHost db.internal\n  HostName 10.0.0.9\n",
+        );
+        assert_eq!(
+            host(&import, "db.internal").proxy_jump.as_deref(),
+            Some("bastion")
+        );
     }
 
     // -- Include -----------------------------------------------------------
