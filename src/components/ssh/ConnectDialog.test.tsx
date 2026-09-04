@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { typing } from "@tests/user";
 
+const pickPrivateKey = vi.fn();
+vi.mock("@/ipc/dialog", () => ({
+  pickPrivateKey: (...args: unknown[]) => pickPrivateKey(...args),
+}));
+
 import { buildMethods, ConnectDialog } from "./ConnectDialog";
 
 describe("buildMethods", () => {
@@ -123,5 +128,33 @@ describe("ConnectDialog", () => {
     );
 
     expect(container.querySelector('input[type="password"]')).toBeNull();
+  });
+
+  it("fills the key field from the native file picker", async () => {
+    pickPrivateKey.mockResolvedValue("/home/me/.ssh/id_ed25519");
+    const onConnect = vi.fn();
+    render(<ConnectDialog open onConnect={onConnect} onCancel={vi.fn()} />);
+
+    await typing().click(screen.getByRole("button", { name: "Browse…" }));
+    expect(await screen.findByDisplayValue("/home/me/.ssh/id_ed25519")).toBeInTheDocument();
+
+    await typing().type(screen.getByLabelText("Host"), "example.com");
+    await typing().type(screen.getByLabelText("Username"), "deploy");
+    await typing().click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(onConnect.mock.calls[0][0].methods).toContainEqual({
+      kind: "key",
+      path: "/home/me/.ssh/id_ed25519",
+    });
+  });
+
+  it("leaves the key field untouched when the picker is cancelled", async () => {
+    pickPrivateKey.mockResolvedValue(null);
+    render(<ConnectDialog open onConnect={vi.fn()} onCancel={vi.fn()} />);
+
+    await typing().type(screen.getByLabelText(/Private key/), "~/.ssh/existing");
+    await typing().click(screen.getByRole("button", { name: "Browse…" }));
+
+    expect(screen.getByDisplayValue("~/.ssh/existing")).toBeInTheDocument();
   });
 });

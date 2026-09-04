@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { pickPrivateKey } from "@/ipc/dialog";
 import type { Folder, Host, HostInput } from "@/ipc/types";
 import { useThemeCatalogue } from "@/stores/settings";
 
@@ -80,6 +81,11 @@ export function HostDialog({
       },
       jumpHostId: jumpHostId || null,
     }, themeOverride || null);
+  };
+
+  const browseForKey = async () => {
+    const chosen = await pickPrivateKey(keyPath);
+    if (chosen) setKeyPath(chosen);
   };
 
   return (
@@ -228,13 +234,22 @@ export function HostDialog({
           </label>
 
           <Field label="Private key" htmlFor="host-key" hint="optional">
-            <input
-              id="host-key"
-              value={keyPath}
-              onChange={(event) => setKeyPath(event.target.value)}
-              placeholder="~/.ssh/id_ed25519"
-              className={inputClass}
-            />
+            <div className="flex gap-2">
+              <input
+                id="host-key"
+                value={keyPath}
+                onChange={(event) => setKeyPath(event.target.value)}
+                placeholder="~/.ssh/id_ed25519"
+                className={inputClass}
+              />
+              <button
+                type="button"
+                onClick={() => void browseForKey()}
+                className="shrink-0 rounded border border-[var(--hb-border)] px-2 py-1 text-xs hover:bg-[var(--hb-hover)]"
+              >
+                Browse…
+              </button>
+            </div>
           </Field>
 
           <label className="flex items-center gap-2">

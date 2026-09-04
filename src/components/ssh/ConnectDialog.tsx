@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { pickPrivateKey } from "@/ipc/dialog";
 import type { AuthChoice, SshTarget } from "@/ipc/types";
 
 /** OpenSSH's default, and what every "just connect" case wants. */
@@ -48,6 +49,11 @@ export function ConnectDialog({ open, onConnect, onCancel }: Props) {
       target: { host: host.trim(), port: parsedPort, user: user.trim() },
       methods: buildMethods({ useAgent, keyPath: keyPath.trim() }),
     });
+  };
+
+  const browseForKey = async () => {
+    const chosen = await pickPrivateKey(keyPath);
+    if (chosen) setKeyPath(chosen);
   };
 
   return (
@@ -122,13 +128,22 @@ export function ConnectDialog({ open, onConnect, onCancel }: Props) {
         <label className="mb-2 block text-xs" htmlFor="ssh-key">
           Private key <span className="text-[var(--hb-fg-muted)]">(optional)</span>
         </label>
-        <input
-          id="ssh-key"
-          value={keyPath}
-          onChange={(event) => setKeyPath(event.target.value)}
-          placeholder="~/.ssh/id_ed25519"
-          className="mb-3 w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-xs"
-        />
+        <div className="mb-3 flex gap-2">
+          <input
+            id="ssh-key"
+            value={keyPath}
+            onChange={(event) => setKeyPath(event.target.value)}
+            placeholder="~/.ssh/id_ed25519"
+            className="w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-xs"
+          />
+          <button
+            type="button"
+            onClick={() => void browseForKey()}
+            className="shrink-0 rounded border border-[var(--hb-border)] px-2 py-1 text-xs hover:bg-[var(--hb-hover)]"
+          >
+            Browse…
+          </button>
+        </div>
 
         <p className="mb-3 text-xs text-[var(--hb-fg-muted)]">
           Passwords and key passphrases are asked for during the connection, and only if they

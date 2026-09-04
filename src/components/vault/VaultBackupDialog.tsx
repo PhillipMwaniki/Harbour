@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { pickOpenFile, pickSavePath } from "@/ipc/dialog";
 import { exportVault, importVault } from "@/ipc/vault";
 import { errorMessage } from "@/ipc/types";
 
@@ -72,6 +73,13 @@ export function VaultBackupDialog({ mode, onDone, onCancel }: Props) {
     }
   };
 
+  const browsePath = async () => {
+    const chosen = isExport
+      ? await pickSavePath("Export vault to", "harbour-vault.hbx")
+      : await pickOpenFile("Open a vault export", path);
+    if (chosen) setPath(chosen);
+  };
+
   const pathLabel = isExport ? "Save to" : "Open";
   const pathPlaceholder = isExport
     ? "C:\\Users\\you\\Desktop\\harbour-vault.hbx"
@@ -109,13 +117,22 @@ export function VaultBackupDialog({ mode, onDone, onCancel }: Props) {
         <label className="mb-1 block" htmlFor="backup-path">
           {pathLabel}
         </label>
-        <input
-          id="backup-path"
-          value={path}
-          onChange={(event) => setPath(event.target.value)}
-          placeholder={pathPlaceholder}
-          className="mb-3 w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
-        />
+        <div className="mb-3 flex gap-2">
+          <input
+            id="backup-path"
+            value={path}
+            onChange={(event) => setPath(event.target.value)}
+            placeholder={pathPlaceholder}
+            className="w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
+          />
+          <button
+            type="button"
+            onClick={() => void browsePath()}
+            className="shrink-0 rounded border border-[var(--hb-border)] px-2 py-1 hover:bg-[var(--hb-hover)]"
+          >
+            Browse…
+          </button>
+        </div>
 
         <label className="mb-1 block" htmlFor="backup-passphrase">
           Passphrase
