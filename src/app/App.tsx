@@ -14,6 +14,7 @@ import { paneHandle } from "@/components/terminal/registry";
 import { TabBar } from "@/components/terminal/TabBar";
 import { HostDialog } from "@/components/vault/HostDialog";
 import { ImportDialog, type ImportSource } from "@/components/vault/ImportDialog";
+import { VaultBackupDialog, type BackupMode } from "@/components/vault/VaultBackupDialog";
 import { SessionTree } from "@/components/vault/SessionTree";
 import { onSessionClosed, sessionClose, shellList } from "@/ipc/session";
 import { connectionRespond, onHostKeyPrompt, onSecretPrompt } from "@/ipc/ssh";
@@ -57,7 +58,8 @@ type Modal =
   | { kind: "connect" }
   | { kind: "settings" }
   | { kind: "host"; host: Host | null }
-  | { kind: "import"; source: ImportSource };
+  | { kind: "import"; source: ImportSource }
+  | { kind: "backup"; mode: BackupMode };
 
 export default function App() {
   const tabs = useSessions((state) => state.tabs);
@@ -457,21 +459,41 @@ export default function App() {
               onEdit={(host) => setModal({ kind: "host", host })}
             />
 
-            <div className="flex gap-1 border-t border-[var(--hb-border)] p-1 text-xs">
-              <button
-                type="button"
-                className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
-                onClick={() => setModal({ kind: "import", source: "sshConfig" })}
-              >
-                Import OpenSSH
-              </button>
-              <button
-                type="button"
-                className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
-                onClick={() => setModal({ kind: "import", source: "xshell" })}
-              >
-                Import Xshell
-              </button>
+            <div className="flex flex-col gap-1 border-t border-[var(--hb-border)] p-1 text-xs">
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                  onClick={() => setModal({ kind: "import", source: "sshConfig" })}
+                >
+                  Import OpenSSH
+                </button>
+                <button
+                  type="button"
+                  className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                  onClick={() => setModal({ kind: "import", source: "xshell" })}
+                >
+                  Import Xshell
+                </button>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  title="Save the whole vault to one encrypted file"
+                  className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                  onClick={() => setModal({ kind: "backup", mode: "export" })}
+                >
+                  Export vault
+                </button>
+                <button
+                  type="button"
+                  title="Merge an encrypted vault export into this one"
+                  className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                  onClick={() => setModal({ kind: "backup", mode: "import" })}
+                >
+                  Import vault
+                </button>
+              </div>
             </div>
           </aside>
         )}
@@ -539,6 +561,18 @@ export default function App() {
                 if (hosts > 0) parts.push(`${hosts} host${hosts === 1 ? "" : "s"}`);
                 if (hostKeys > 0) parts.push(`${hostKeys} host key${hostKeys === 1 ? "" : "s"}`);
                 setBanner(parts.length > 0 ? `Imported ${parts.join(" and ")}.` : null);
+                void useVault.getState().refresh();
+              }}
+            />
+          )}
+
+          {modal.kind === "backup" && (
+            <VaultBackupDialog
+              mode={modal.mode}
+              onCancel={() => setModal({ kind: "none" })}
+              onDone={(message) => {
+                setModal({ kind: "none" });
+                setBanner(message);
                 void useVault.getState().refresh();
               }}
             />

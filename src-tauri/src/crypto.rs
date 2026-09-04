@@ -99,7 +99,8 @@ pub fn seal(passphrase: &str, plaintext: &[u8]) -> AppResult<Vec<u8>> {
         .encrypt(XNonce::from_slice(&nonce), plaintext)
         .map_err(|_| AppError::Crypto("encryption failed".into()))?;
 
-    let mut out = Vec::with_capacity(MAGIC.len() + 1 + 12 + SALT_LEN + NONCE_LEN + ciphertext.len());
+    let mut out =
+        Vec::with_capacity(MAGIC.len() + 1 + 12 + SALT_LEN + NONCE_LEN + ciphertext.len());
     out.extend_from_slice(MAGIC);
     out.push(FORMAT_VERSION);
     out.extend_from_slice(&params.mem_kib.to_le_bytes());

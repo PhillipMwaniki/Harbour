@@ -9,6 +9,7 @@ import type {
   ImportPreview,
   ImportResult,
   SessionInfo,
+  VaultImportSummary,
   VaultTree,
 } from "./types";
 
@@ -91,6 +92,31 @@ export function applyImport(
   hostKeys: HostKeyCandidate[] = [],
 ): Promise<ImportResult> {
   return invoke<ImportResult>("vault_apply_import", { candidates, username, hostKeys });
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted export and import
+// ---------------------------------------------------------------------------
+
+/**
+ * Seals the whole vault to `path` under `passphrase`. With `includeSecrets`,
+ * the saved passwords and key passphrases go into the file too; without it,
+ * only the hosts do. The file is useless without the passphrase.
+ */
+export function exportVault(
+  path: string,
+  passphrase: string,
+  includeSecrets: boolean,
+): Promise<void> {
+  return invoke("vault_export", { path, passphrase, includeSecrets });
+}
+
+/**
+ * Opens a sealed export at `path` and merges it into the vault, appending
+ * everything with fresh ids so nothing already saved is overwritten.
+ */
+export function importVault(path: string, passphrase: string): Promise<VaultImportSummary> {
+  return invoke<VaultImportSummary>("vault_import", { path, passphrase });
 }
 
 // ---------------------------------------------------------------------------

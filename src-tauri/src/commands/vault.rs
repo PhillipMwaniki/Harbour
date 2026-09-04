@@ -15,6 +15,7 @@ use crate::session::manager::{self, NewSession};
 use crate::session::{SessionClosed, SessionInfo, SessionKind};
 use crate::ssh::client::{self, DynAsker, Endpoint};
 use crate::ssh::{Asker, HostKeyAnswer, HostKeyQuestion, SecretAnswer, SecretKind, SecretQuestion};
+use crate::vault::export::{self, ExportOptions, ImportSummary};
 use crate::vault::import::{self, Applied, Candidate, HostKeyCandidate, Preview};
 use crate::vault::model::{Folder, FolderId, Host, HostId, HostInput, VaultTree};
 use crate::vault::secrets::{self, SecretSlot};
@@ -227,6 +228,64 @@ pub async fn vault_apply_import(
         let mut applied = import::apply(&vault, &candidates, username.as_deref())?;
         applied.host_keys = import::apply_host_keys(&known, &host_keys.unwrap_or_default())?;
         Ok(applied)
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted export and import
+// ---------------------------------------------------------------------------
+
+/// Seals the whole vault to `path` under `passphrase`. With `include_secrets`,
+/// the keychain's saved passwords and key passphrases go into the file too;
+/// without it, only the hosts do. The file is useless without the passphrase.
+#[tauri::command]
+pub async fn vault_export(
+    state: State<'_, AppState>,
+    path: String,
+    passphrase: String,
+    include_secrets: bool,
+) -> AppResult<()> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || {
+        let read = |id: &HostId, slot: SecretSlot| match secrets::get(id, slot) {
+            Ok(secret) => secret,
+            Err(err) => {
+                // A secret we cannot read is simply left out of the export,
+                // rather than failing the whole thing.
+                tracing::warn!(error = %err, "could not read a secret for export");
+                None
+            }
+        };
+        let sealed =
+            export::export_sealed(&vault, &passphrase, ExportOptions { include_secrets }, read)?;
+        std::fs::write(&path, sealed)?;
+        Ok(())
+    })
+    .await
+}
+
+/// Opens a sealed export at `path` with `passphrase` and merges it into the
+/// vault, appending everything with fresh ids. Returns what was added.
+#[tauri::command]
+pub async fn vault_import(
+    state: State<'_, AppState>,
+    path: String,
+    passphrase: String,
+) -> AppResult<ImportSummary> {
+    let vault = Arc::clone(&state.vault);
+    blocking(move || {
+        let bytes = std::fs::read(&path)?;
+        // Secrets go back to the keychain best-effort: a machine with none
+        // should still get the hosts, and the connect path falls back to
+        // asking for a password it cannot find.
+        let write = |id: &HostId, slot: SecretSlot, secret: &str| {
+            if let Err(err) = secrets::set(id, slot, secret) {
+                tracing::warn!(error = %err, "could not store an imported secret");
+            }
+            Ok::<_, AppError>(())
+        };
+        export::import_sealed(&vault, &passphrase, &bytes, write)
     })
     .await
 }

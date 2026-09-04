@@ -204,6 +204,14 @@ export interface ImportResult {
   hostKeys: number;
 }
 
+/** What a sealed-vault import added. Everything here is new; nothing was replaced. */
+export interface VaultImportSummary {
+  folders: number;
+  hosts: number;
+  /** Passwords and key passphrases restored to the keychain. */
+  secrets: number;
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------

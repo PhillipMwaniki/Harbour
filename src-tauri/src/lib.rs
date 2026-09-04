@@ -152,6 +152,8 @@ pub fn run() {
             commands::vault::vault_preview_ssh_config,
             commands::vault::vault_preview_xshell,
             commands::vault::vault_apply_import,
+            commands::vault::vault_export,
+            commands::vault::vault_import,
             commands::vault::host_connect,
             commands::settings::settings_load,
             commands::settings::settings_save,

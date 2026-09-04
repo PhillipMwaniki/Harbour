@@ -149,6 +149,8 @@ id that is no longer waiting - it timed out, or its connection died - returns
 | `vault_preview_ssh_config` | `path?: string` | `ImportPreview` |
 | `vault_preview_xshell` | `path: string` | `ImportPreview` |
 | `vault_apply_import` | `candidates: ImportCandidate[]`, `username: string \| null`, `hostKeys?: HostKeyCandidate[]` | `ImportResult` |
+| `vault_export` | `path: string`, `passphrase: string`, `includeSecrets: boolean` | `void` |
+| `vault_import` | `path: string`, `passphrase: string` | `VaultImportSummary` |
 | `host_connect` | `hostId: string`, `cols: number`, `rows: number` | `SessionInfo` |
 
 `vault_tree` returns the whole tree in one call: a few hundred hosts at most,
@@ -198,6 +200,30 @@ cannot double a line. A changed key is never replaced by an import: the
 connect-time prompt, with both fingerprints in front of the user, is the only
 way past one. Keys go to Harbour's own `known_hosts`; `~/.ssh` is never
 written. `ImportResult.hostKeys` says how many were written.
+
+`vault_export` seals the whole vault - folders, hosts, and, when
+`includeSecrets` is set, the keychain's saved passwords and key passphrases -
+into one encrypted file at `path`. The sealing is Argon2id then
+XChaCha20-Poly1305 (see `src-tauri/src/crypto.rs`); the passphrase is the only
+thing not in the file, and an empty one is refused. A secret lives in the
+plaintext only for the instant between being read from the keychain and being
+sealed, and is never written unencrypted.
+
+`vault_import` opens such a file with `passphrase` and **merges** it in: every
+id is reissued as it lands, so nothing already saved is overwritten and
+importing the same file twice makes two copies rather than a conflict. Restored
+secrets go straight back into the keychain, best-effort - a machine without one
+still gets the hosts. A wrong passphrase or an altered file is one
+`CRYPTO_ERROR`, and nothing is imported. `VaultImportSummary` reports what was
+added:
+
+```ts
+type VaultImportSummary = {
+  folders: number;
+  hosts: number;
+  secrets: number; // passwords and passphrases restored to the keychain
+};
+```
 
 `host_connect` is `ssh_connect` with the vault behind it. The prompts are the
 same, except that a saved password is taken from the keychain without asking,
