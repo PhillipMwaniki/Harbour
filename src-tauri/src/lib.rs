@@ -27,6 +27,7 @@ use crate::ssh::forward::Forwards;
 use crate::ssh::known_hosts::KnownHosts;
 use crate::ssh::sftp::Connections;
 use crate::transfer::engine::Engine;
+use crate::vault::secrets::SecretStore;
 use crate::vault::store::Vault;
 
 /// Everything the command handlers need. Kept deliberately small: each
@@ -37,9 +38,12 @@ pub struct AppState {
     pub prompts: Arc<Prompts>,
     /// Host key trust. Reads the user's OpenSSH files, writes only its own.
     pub known_hosts: Arc<KnownHosts>,
-    /// Saved hosts and the folder tree. Holds no secrets; those are in the OS
-    /// keychain, addressed by host id.
+    /// Saved hosts and the folder tree. Holds no secrets; those are in the
+    /// secret store, addressed by host id.
     pub vault: Arc<Vault>,
+    /// Where secrets live: the OS keychain, or an encrypted file behind a
+    /// master password when there is no keychain.
+    pub secrets: Arc<SecretStore>,
     /// Preferences: theme, keymap, highlight rules, logging. A separate file
     /// from the vault because it is one people hand-edit and copy about.
     pub settings: Arc<SettingsStore>,
@@ -112,6 +116,7 @@ pub fn run() {
                 // ~/.ssh: the user's file is read but never written to.
                 known_hosts: Arc::new(KnownHosts::new(config_dir.join("known_hosts"))),
                 vault: Arc::new(vault),
+                secrets: Arc::new(SecretStore::detect(config_dir.join("secrets.vault"))),
                 settings: Arc::new(SettingsStore::open(config_dir.join("settings.json"))),
                 log_dir: log_dir.clone(),
                 connections: Connections::new(),
@@ -154,6 +159,11 @@ pub fn run() {
             commands::vault::vault_apply_import,
             commands::vault::vault_export,
             commands::vault::vault_import,
+            commands::vault::secret_store_status,
+            commands::vault::secret_store_create,
+            commands::vault::secret_store_unlock,
+            commands::vault::secret_store_change_master,
+            commands::vault::secret_store_lock,
             commands::vault::host_connect,
             commands::settings::settings_load,
             commands::settings::settings_save,

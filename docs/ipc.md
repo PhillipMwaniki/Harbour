@@ -151,15 +151,40 @@ id that is no longer waiting - it timed out, or its connection died - returns
 | `vault_apply_import` | `candidates: ImportCandidate[]`, `username: string \| null`, `hostKeys?: HostKeyCandidate[]` | `ImportResult` |
 | `vault_export` | `path: string`, `passphrase: string`, `includeSecrets: boolean` | `void` |
 | `vault_import` | `path: string`, `passphrase: string` | `VaultImportSummary` |
+| `secret_store_status` | - | `SecretStoreStatus` |
+| `secret_store_create` | `master: string` | `void` |
+| `secret_store_unlock` | `master: string` | `void` |
+| `secret_store_change_master` | `newMaster: string` | `void` |
+| `secret_store_lock` | - | `void` |
 | `host_connect` | `hostId: string`, `cols: number`, `rows: number` | `SessionInfo` |
 
 `vault_tree` returns the whole tree in one call: a few hundred hosts at most,
 so paging it would cost more than it saves.
 
-**No command takes or returns a secret.** A `Host` says which methods to try
-and whether a password is expected (`hasSavedPassword`); the password itself is
-in the OS keychain, keyed by host id, and only ever moves between the keychain
-and the connection that needs it.
+**No command returns a secret.** A `Host` says which methods to try and whether
+a password is expected (`hasSavedPassword`); the password itself is in the
+secret store, keyed by host id, and only ever moves between the store and the
+connection that needs it. The one exception is that the store's own commands
+*take* a secret inward - a master password the user types, or `vault_import`'s
+sealed file - which is the same direction a connect-time password prompt goes.
+
+The secret store is the OS keychain where a machine has one, and an encrypted
+file behind a master password where it does not (`SecretStoreStatus.backend` is
+`"keychain"` or `"file"`). The file starts locked each session:
+`secret_store_create` sets the master password the first time,
+`secret_store_unlock` opens it, `secret_store_change_master` re-seals it under a
+new one, and `secret_store_lock` forgets it again. The file backend seals with
+the same Argon2id + XChaCha20-Poly1305 envelope as the exports. On a keychain
+machine the `secret_store_*` mutators return `VAULT_ERROR` - there is no master
+password to manage.
+
+```ts
+type SecretStoreStatus = {
+  backend: "keychain" | "file";
+  exists: boolean;   // a keychain always exists; a file may not until set up
+  unlocked: boolean; // a keychain is always usable; a file must be unlocked
+};
+```
 
 `vault_delete_folder` deletes everything underneath, hosts and saved secrets
 included. The UI confirms first.

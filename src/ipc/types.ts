@@ -208,8 +208,18 @@ export interface ImportResult {
 export interface VaultImportSummary {
   folders: number;
   hosts: number;
-  /** Passwords and key passphrases restored to the keychain. */
+  /** Passwords and key passphrases restored to the secret store. */
   secrets: number;
+}
+
+/** Where this machine keeps secrets, and whether the store is ready. */
+export interface SecretStoreStatus {
+  /** `"keychain"` (the OS keychain) or `"file"` (a master-password file). */
+  backend: "keychain" | "file";
+  /** The keychain always exists; a file may not until a master password is set. */
+  exists: boolean;
+  /** The keychain is always usable; a file must be unlocked with the master password first. */
+  unlocked: boolean;
 }
 
 // ---------------------------------------------------------------------------

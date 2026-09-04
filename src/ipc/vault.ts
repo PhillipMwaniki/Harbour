@@ -8,6 +8,7 @@ import type {
   ImportCandidate,
   ImportPreview,
   ImportResult,
+  SecretStoreStatus,
   SessionInfo,
   VaultImportSummary,
   VaultTree,
@@ -59,9 +60,38 @@ export function forgetSecrets(hostId: string): Promise<void> {
   return invoke("vault_forget_secrets", { hostId });
 }
 
-/** Whether this machine can save secrets at all. */
+/** Whether a secret can be saved right now (a keychain, or an unlocked master password). */
 export function keychainAvailable(): Promise<boolean> {
   return invoke<boolean>("vault_keychain_available");
+}
+
+// ---------------------------------------------------------------------------
+// Master password (the secret store)
+// ---------------------------------------------------------------------------
+
+/** Where secrets live, and whether the store is ready to use. */
+export function secretStoreStatus(): Promise<SecretStoreStatus> {
+  return invoke<SecretStoreStatus>("secret_store_status");
+}
+
+/** Sets the master password for the first time, creating the encrypted file. */
+export function secretStoreCreate(master: string): Promise<void> {
+  return invoke("secret_store_create", { master });
+}
+
+/** Unlocks the encrypted secret file with the master password. */
+export function secretStoreUnlock(master: string): Promise<void> {
+  return invoke("secret_store_unlock", { master });
+}
+
+/** Re-seals the secret file under a new master password. Must be unlocked first. */
+export function secretStoreChangeMaster(newMaster: string): Promise<void> {
+  return invoke("secret_store_change_master", { newMaster });
+}
+
+/** Forgets the master password for this session. */
+export function secretStoreLock(): Promise<void> {
+  return invoke("secret_store_lock");
 }
 
 // ---------------------------------------------------------------------------
