@@ -11,16 +11,16 @@ no account, no cloud, credentials never leave the machine unencrypted.
 Harbour is an Xshell + Xftp replacement for teams that live on Windows but ship
 to Linux, and it runs the same on macOS and Linux.
 
-> **Status: milestone 7 of 9.** Jump hosts, port forwarding, snippets and
-> follow-the-shell all landed, and Harbour now updates itself from GitHub
-> releases. A saved host can sit behind a bastion (any depth), a local port can
-> be forwarded over the connection a terminal already has, a multi-line paste
-> is confirmed before it runs, saved commands insert from a palette, and the
-> file panes can follow the shell's directory. Underneath: SFTP and transfers
-> on the shared connection, a finished terminal with splits, find, keymap,
-> highlight rules and logging, SSH with agent, key and password auth, host keys
-> checked against your `known_hosts`, saved hosts with keychain passwords, and
-> imports from `~/.ssh/config` and Xshell backups. Packaging is next. See
+> **Status: milestone 8 of 9 - the MVP.** Harbour can now be carried between
+> machines: seal the whole vault into one encrypted file and merge it back
+> elsewhere, protect saved passwords with a master password where there is no
+> system keychain, and run entirely from a folder beside the executable in
+> portable mode. Before this: jump hosts of any depth, port forwarding, a
+> snippet palette, follow-the-shell and self-update from GitHub releases; SFTP
+> and transfers on the shared connection; a finished terminal with splits, find,
+> keymap, highlight rules and logging; SSH with agent, key and password auth,
+> host keys checked against your `known_hosts`, saved hosts with keychain
+> passwords, and imports from `~/.ssh/config` and Xshell backups. See
 > [the roadmap](#roadmap).
 
 ## Requirements
@@ -97,8 +97,10 @@ is a SQLite database beside Harbour's config holding folders, hosts and no
 secrets whatsoever. Deleting a host takes its keychain entries with it, and
 *Forget it* in the host editor removes them without deleting the host.
 
-If your machine has no usable keychain, Harbour asks every time rather than
-falling back to writing the password somewhere.
+If your machine has no usable keychain, Harbour keeps saved secrets in an
+encrypted file behind a **master password** instead (see below). Until you set
+one, it simply asks every time rather than writing a password somewhere you did
+not choose.
 
 ## Importing an existing estate
 
@@ -117,6 +119,32 @@ backup also offers the host keys Xshell had accepted, so a migrated estate does
 not greet you with a trust-on-first-use prompt per host. Entries whose source never named a username are
 skipped unless you supply one to fall back on - importing under a guess would
 produce hosts that fail to connect for a reason you cannot see.
+
+## Backups, master password and portable mode
+
+**Export vault** (in the session-manager footer) seals your whole tree of
+folders and hosts into one encrypted file. Tick *Include saved passwords* and
+your credentials go in too, making it a full backup; leave it off for a
+shareable list of hosts. The file is sealed with Argon2id and
+XChaCha20-Poly1305 under a passphrase you choose - the only thing that opens it,
+with no recovery if it is lost. **Import vault** merges such a file back in,
+appending everything alongside what you already have rather than overwriting, so
+importing into a populated vault is safe and importing the same file twice makes
+two copies rather than a conflict.
+
+On a machine with **no system keychain**, a **master password** unlocks an
+encrypted file that holds your saved passwords in the same sealed format. You
+set it once, enter it when Harbour starts (or skip, and be asked per host), and
+can change it from the session-manager footer. The master password is held in
+memory only while unlocked and wiped when Harbour closes; the file on disk is
+never anything but ciphertext.
+
+**Portable mode** keeps everything - vault, settings, logs, known hosts, and the
+master-password secret file - in a `data` folder beside the executable instead
+of in your user profile. Turn it on by placing an empty file named `portable`
+next to the Harbour executable. A portable copy leaves nothing on the host
+machine and never touches its keychain, so it carries its own secrets behind the
+master password: ideal for a USB stick.
 
 ## Splits, find and logging
 
@@ -278,7 +306,10 @@ src-tauri/src/    Rust core
   edit.rs         a remote file in a local editor, uploaded on save
   ssh/forward.rs  local port forwards on a session's connection
   ssh/            connect and auth, channel transport, sftp, known_hosts, agent
-  vault/          sqlite host store, os keychain, ssh_config and xshell imports
+  vault/          sqlite host store, os keychain or master-password file,
+                  encrypted export/import, ssh_config and xshell imports
+  crypto.rs       the Argon2id + XChaCha20-Poly1305 envelope both of those seal with
+  portable.rs     portable-mode detection: data beside the executable
 docs/             architecture and the IPC contract
 ```
 
@@ -300,9 +331,12 @@ docs/             architecture and the IPC contract
    bastions of any depth, a snippet palette, follow-the-shell, and a
    multi-line paste confirmation. Self-update from GitHub releases. *(done;
    reading `ProxyJump` from `~/.ssh/config` at import is a follow-up.)*
-8. Packaging: installers, portable mode, encrypted vault export/import. **MVP.**
+8. **Portable, encrypted, movable** - a master password and an encrypted secret
+   file for machines without a keychain, encrypted vault export/import to carry
+   an estate between machines, and portable mode that keeps everything beside
+   the executable. **MVP.** *(done)*
 9. Triggers and notifications, fleet runner, SFTP extras, sync adapters,
-   serial and telnet, auto-update, E2E tests.
+   serial and telnet, E2E tests.
 
 ## Migrating from Xshell
 

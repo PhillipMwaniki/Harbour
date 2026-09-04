@@ -97,6 +97,9 @@ pub enum AppError {
     #[error("port forward: {0}")]
     Forward(String),
 
+    #[error("{0}")]
+    Crypto(String),
+
     #[error("prompt {0} is no longer waiting for an answer")]
     PromptNotFound(String),
 
@@ -140,6 +143,7 @@ impl AppError {
             AppError::TransferNotFound(_) => "TRANSFER_NOT_FOUND",
             AppError::Edit(_) => "EDIT_ERROR",
             AppError::Forward(_) => "FORWARD_ERROR",
+            AppError::Crypto(_) => "CRYPTO_ERROR",
             AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
             AppError::PromptTimedOut => "PROMPT_TIMED_OUT",
             AppError::Internal(_) => "INTERNAL",

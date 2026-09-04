@@ -14,6 +14,8 @@ import { paneHandle } from "@/components/terminal/registry";
 import { TabBar } from "@/components/terminal/TabBar";
 import { HostDialog } from "@/components/vault/HostDialog";
 import { ImportDialog, type ImportSource } from "@/components/vault/ImportDialog";
+import { VaultBackupDialog, type BackupMode } from "@/components/vault/VaultBackupDialog";
+import { MasterPasswordDialog, type MasterMode } from "@/components/vault/MasterPasswordDialog";
 import { SessionTree } from "@/components/vault/SessionTree";
 import { onSessionClosed, sessionClose, shellList } from "@/ipc/session";
 import { connectionRespond, onHostKeyPrompt, onSecretPrompt } from "@/ipc/ssh";
@@ -24,6 +26,7 @@ import {
   deleteHost,
   forgetSecrets,
   keychainAvailable,
+  secretStoreStatus,
   updateHost,
 } from "@/ipc/vault";
 import {
@@ -32,6 +35,7 @@ import {
   type HostInput,
   type HostKeyAnswer,
   type SecretAnswer,
+  type SecretStoreStatus,
 } from "@/ipc/types";
 import {
   actionFor,
@@ -57,7 +61,9 @@ type Modal =
   | { kind: "connect" }
   | { kind: "settings" }
   | { kind: "host"; host: Host | null }
-  | { kind: "import"; source: ImportSource };
+  | { kind: "import"; source: ImportSource }
+  | { kind: "backup"; mode: BackupMode }
+  | { kind: "master"; mode: MasterMode };
 
 export default function App() {
   const tabs = useSessions((state) => state.tabs);
@@ -71,6 +77,7 @@ export default function App() {
   const forwardsOpen = useForwards((state) => state.open);
   const theme = useTerminalTheme();
   const [banner, setBanner] = useState<string | null>(null);
+  const [secretStore, setSecretStore] = useState<SecretStoreStatus | null>(null);
   const [modal, setModal] = useState<Modal>({ kind: "none" });
   const [sidebar, setSidebar] = useState(true);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
@@ -132,7 +139,18 @@ export default function App() {
       try {
         useVault.getState().setKeychain(await keychainAvailable());
       } catch {
-        // Treated as "no keychain": the UI simply will not offer to save.
+        // Treated as "cannot save": the UI simply will not offer to.
+      }
+      try {
+        const store = await secretStoreStatus();
+        setSecretStore(store);
+        // A machine using a master-password file that is already set up but
+        // locked: offer to unlock now, so saved passwords are ready. Skippable.
+        if (store.backend === "file" && store.exists && !store.unlocked) {
+          setModal({ kind: "master", mode: "unlock" });
+        }
+      } catch {
+        // Status is advisory; failing it just means no launch-time prompt.
       }
       useSessions.getState().openTab();
       // Ask GitHub whether a newer version is out. Quiet: a failed check on a
@@ -457,21 +475,60 @@ export default function App() {
               onEdit={(host) => setModal({ kind: "host", host })}
             />
 
-            <div className="flex gap-1 border-t border-[var(--hb-border)] p-1 text-xs">
-              <button
-                type="button"
-                className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
-                onClick={() => setModal({ kind: "import", source: "sshConfig" })}
-              >
-                Import OpenSSH
-              </button>
-              <button
-                type="button"
-                className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
-                onClick={() => setModal({ kind: "import", source: "xshell" })}
-              >
-                Import Xshell
-              </button>
+            <div className="flex flex-col gap-1 border-t border-[var(--hb-border)] p-1 text-xs">
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                  onClick={() => setModal({ kind: "import", source: "sshConfig" })}
+                >
+                  Import OpenSSH
+                </button>
+                <button
+                  type="button"
+                  className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                  onClick={() => setModal({ kind: "import", source: "xshell" })}
+                >
+                  Import Xshell
+                </button>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  title="Save the whole vault to one encrypted file"
+                  className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                  onClick={() => setModal({ kind: "backup", mode: "export" })}
+                >
+                  Export vault
+                </button>
+                <button
+                  type="button"
+                  title="Merge an encrypted vault export into this one"
+                  className="flex-1 rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                  onClick={() => setModal({ kind: "backup", mode: "import" })}
+                >
+                  Import vault
+                </button>
+              </div>
+              {secretStore?.backend === "file" && (
+                <button
+                  type="button"
+                  title="The master password that protects saved credentials on this machine"
+                  className="rounded px-2 py-1 hover:bg-[var(--hb-hover)]"
+                  onClick={() =>
+                    setModal({
+                      kind: "master",
+                      mode: !secretStore.exists ? "create" : secretStore.unlocked ? "change" : "unlock",
+                    })
+                  }
+                >
+                  {!secretStore.exists
+                    ? "Set master password"
+                    : secretStore.unlocked
+                      ? "Change master password"
+                      : "Unlock credentials"}
+                </button>
+              )}
             </div>
           </aside>
         )}
@@ -540,6 +597,37 @@ export default function App() {
                 if (hostKeys > 0) parts.push(`${hostKeys} host key${hostKeys === 1 ? "" : "s"}`);
                 setBanner(parts.length > 0 ? `Imported ${parts.join(" and ")}.` : null);
                 void useVault.getState().refresh();
+              }}
+            />
+          )}
+
+          {modal.kind === "backup" && (
+            <VaultBackupDialog
+              mode={modal.mode}
+              onCancel={() => setModal({ kind: "none" })}
+              onDone={(message) => {
+                setModal({ kind: "none" });
+                setBanner(message);
+                void useVault.getState().refresh();
+              }}
+            />
+          )}
+
+          {modal.kind === "master" && (
+            <MasterPasswordDialog
+              mode={modal.mode}
+              onCancel={() => setModal({ kind: "none" })}
+              onDone={(message) => {
+                setModal({ kind: "none" });
+                setBanner(message);
+                // A newly unlocked or created store can now save; refresh the
+                // flag and the status the footer button reads.
+                void keychainAvailable()
+                  .then((can) => useVault.getState().setKeychain(can))
+                  .catch(() => {});
+                void secretStoreStatus()
+                  .then(setSecretStore)
+                  .catch(() => {});
               }}
             />
           )}

@@ -1,8 +1,10 @@
 pub mod commands;
+pub mod crypto;
 pub mod edit;
 pub mod error;
 pub mod files;
 pub mod glob;
+pub mod portable;
 pub mod prompt;
 pub mod session;
 pub mod settings;
@@ -26,6 +28,7 @@ use crate::ssh::forward::Forwards;
 use crate::ssh::known_hosts::KnownHosts;
 use crate::ssh::sftp::Connections;
 use crate::transfer::engine::Engine;
+use crate::vault::secrets::SecretStore;
 use crate::vault::store::Vault;
 
 /// Everything the command handlers need. Kept deliberately small: each
@@ -36,9 +39,12 @@ pub struct AppState {
     pub prompts: Arc<Prompts>,
     /// Host key trust. Reads the user's OpenSSH files, writes only its own.
     pub known_hosts: Arc<KnownHosts>,
-    /// Saved hosts and the folder tree. Holds no secrets; those are in the OS
-    /// keychain, addressed by host id.
+    /// Saved hosts and the folder tree. Holds no secrets; those are in the
+    /// secret store, addressed by host id.
     pub vault: Arc<Vault>,
+    /// Where secrets live: the OS keychain, or an encrypted file behind a
+    /// master password when there is no keychain.
+    pub secrets: Arc<SecretStore>,
     /// Preferences: theme, keymap, highlight rules, logging. A separate file
     /// from the vault because it is one people hand-edit and copy about.
     pub settings: Arc<SettingsStore>,
@@ -65,19 +71,29 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let log_dir = app
-                .path()
-                .app_log_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("harbour"));
+            // Portable mode keeps everything beside the executable; otherwise
+            // the OS's per-user config and log directories are used.
+            let portable = portable::base_dir();
+            let (config_dir, log_dir) = match &portable {
+                Some(base) => (base.clone(), base.join("logs")),
+                None => (
+                    app.path()
+                        .app_config_dir()
+                        .unwrap_or_else(|_| std::env::temp_dir().join("harbour")),
+                    app.path()
+                        .app_log_dir()
+                        .unwrap_or_else(|_| std::env::temp_dir().join("harbour")),
+                ),
+            };
+
             // The guard must outlive the app, otherwise buffered log lines are
             // dropped on exit.
             let guard = telemetry::init(&log_dir);
             app.manage(LogGuard(guard));
 
-            let config_dir = app
-                .path()
-                .app_config_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("harbour"));
+            if portable.is_some() {
+                tracing::info!(dir = %config_dir.display(), "running in portable mode");
+            }
 
             // A vault that will not open must not stop the app from starting:
             // local shells and ad-hoc SSH work without it, and an in-memory
@@ -111,6 +127,14 @@ pub fn run() {
                 // ~/.ssh: the user's file is read but never written to.
                 known_hosts: Arc::new(KnownHosts::new(config_dir.join("known_hosts"))),
                 vault: Arc::new(vault),
+                // Portable mode must not reach for the host's keychain: its
+                // secrets belong in the file beside it, behind a master
+                // password. A normal install prefers the keychain when present.
+                secrets: Arc::new(if portable.is_some() {
+                    SecretStore::file_backed(config_dir.join("secrets.vault"))
+                } else {
+                    SecretStore::detect(config_dir.join("secrets.vault"))
+                }),
                 settings: Arc::new(SettingsStore::open(config_dir.join("settings.json"))),
                 log_dir: log_dir.clone(),
                 connections: Connections::new(),
@@ -151,6 +175,13 @@ pub fn run() {
             commands::vault::vault_preview_ssh_config,
             commands::vault::vault_preview_xshell,
             commands::vault::vault_apply_import,
+            commands::vault::vault_export,
+            commands::vault::vault_import,
+            commands::vault::secret_store_status,
+            commands::vault::secret_store_create,
+            commands::vault::secret_store_unlock,
+            commands::vault::secret_store_change_master,
+            commands::vault::secret_store_lock,
             commands::vault::host_connect,
             commands::settings::settings_load,
             commands::settings::settings_save,

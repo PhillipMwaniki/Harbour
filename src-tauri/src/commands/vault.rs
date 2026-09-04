@@ -15,9 +15,10 @@ use crate::session::manager::{self, NewSession};
 use crate::session::{SessionClosed, SessionInfo, SessionKind};
 use crate::ssh::client::{self, DynAsker, Endpoint};
 use crate::ssh::{Asker, HostKeyAnswer, HostKeyQuestion, SecretAnswer, SecretKind, SecretQuestion};
+use crate::vault::export::{self, ExportOptions, ImportSummary};
 use crate::vault::import::{self, Applied, Candidate, HostKeyCandidate, Preview};
 use crate::vault::model::{Folder, FolderId, Host, HostId, HostInput, VaultTree};
-use crate::vault::secrets::{self, SecretSlot};
+use crate::vault::secrets::{SecretSlot, SecretStore, SecretStoreStatus};
 use crate::vault::{ssh_config, xshell};
 use crate::xts;
 use crate::AppState;
@@ -78,9 +79,10 @@ pub async fn vault_move_folder(
 #[tauri::command]
 pub async fn vault_delete_folder(state: State<'_, AppState>, folder_id: FolderId) -> AppResult<()> {
     let vault = Arc::clone(&state.vault);
+    let secrets = Arc::clone(&state.secrets);
     blocking(move || {
         // Take the saved secrets with the hosts, so deleting a folder does not
-        // leave passwords behind in the keychain with nothing pointing at them.
+        // leave passwords behind in the store with nothing pointing at them.
         let doomed: Vec<HostId> = vault
             .tree()?
             .hosts
@@ -90,7 +92,7 @@ pub async fn vault_delete_folder(state: State<'_, AppState>, folder_id: FolderId
             .collect();
         vault.delete_folder(&folder_id)?;
         for host in doomed {
-            forget_all_secrets(&host);
+            forget_all_secrets(&secrets, &host);
         }
         Ok(())
     })
@@ -116,9 +118,10 @@ pub async fn vault_update_host(
 #[tauri::command]
 pub async fn vault_delete_host(state: State<'_, AppState>, host_id: HostId) -> AppResult<()> {
     let vault = Arc::clone(&state.vault);
+    let secrets = Arc::clone(&state.secrets);
     blocking(move || {
         vault.delete_host(&host_id)?;
-        forget_all_secrets(&host_id);
+        forget_all_secrets(&secrets, &host_id);
         Ok(())
     })
     .await
@@ -134,30 +137,33 @@ pub async fn vault_move_host(
     blocking(move || vault.move_host(&host_id, folder_id.as_deref())).await
 }
 
-/// Removes a host's saved password and passphrase from the keychain.
+/// Removes a host's saved password and passphrase from the secret store.
 #[tauri::command]
 pub async fn vault_forget_secrets(state: State<'_, AppState>, host_id: HostId) -> AppResult<()> {
     let vault = Arc::clone(&state.vault);
+    let secrets = Arc::clone(&state.secrets);
     blocking(move || {
-        secrets::delete(&host_id, SecretSlot::Password)?;
-        secrets::delete(&host_id, SecretSlot::KeyPassphrase)?;
+        secrets.delete(&host_id, SecretSlot::Password)?;
+        secrets.delete(&host_id, SecretSlot::KeyPassphrase)?;
         vault.set_saved_password(&host_id, false)
     })
     .await
 }
 
-/// Whether this machine can save secrets at all, so the UI can say so instead
-/// of offering a checkbox that will not stick.
+/// Whether a secret can be saved right now - a keychain, or an unlocked master
+/// password file - so the UI can say so instead of offering a checkbox that
+/// will not stick.
 #[tauri::command]
-pub async fn vault_keychain_available() -> AppResult<bool> {
-    blocking(|| Ok(secrets::available())).await
+pub async fn vault_keychain_available(state: State<'_, AppState>) -> AppResult<bool> {
+    let secrets = Arc::clone(&state.secrets);
+    blocking(move || Ok(secrets.can_save())).await
 }
 
 /// Best effort: a host is being deleted, so its secrets should go too, but a
-/// keychain that refuses must not block the deletion the user asked for.
-fn forget_all_secrets(host: &HostId) {
+/// store that refuses must not block the deletion the user asked for.
+fn forget_all_secrets(secrets: &SecretStore, host: &HostId) {
     for slot in [SecretSlot::Password, SecretSlot::KeyPassphrase] {
-        if let Err(err) = secrets::delete(host, slot) {
+        if let Err(err) = secrets.delete(host, slot) {
             tracing::warn!(error = %err, "could not remove a saved secret");
         }
     }
@@ -232,6 +238,111 @@ pub async fn vault_apply_import(
 }
 
 // ---------------------------------------------------------------------------
+// Encrypted export and import
+// ---------------------------------------------------------------------------
+
+/// Seals the whole vault to `path` under `passphrase`. With `include_secrets`,
+/// the store's saved passwords and key passphrases go into the file too;
+/// without it, only the hosts do. The file is useless without the passphrase.
+#[tauri::command]
+pub async fn vault_export(
+    state: State<'_, AppState>,
+    path: String,
+    passphrase: String,
+    include_secrets: bool,
+) -> AppResult<()> {
+    let vault = Arc::clone(&state.vault);
+    let secrets = Arc::clone(&state.secrets);
+    blocking(move || {
+        let read = |id: &HostId, slot: SecretSlot| match secrets.get(id, slot) {
+            Ok(secret) => secret,
+            Err(err) => {
+                // A secret we cannot read is simply left out of the export,
+                // rather than failing the whole thing.
+                tracing::warn!(error = %err, "could not read a secret for export");
+                None
+            }
+        };
+        let sealed =
+            export::export_sealed(&vault, &passphrase, ExportOptions { include_secrets }, read)?;
+        std::fs::write(&path, sealed)?;
+        Ok(())
+    })
+    .await
+}
+
+/// Opens a sealed export at `path` with `passphrase` and merges it into the
+/// vault, appending everything with fresh ids. Returns what was added.
+#[tauri::command]
+pub async fn vault_import(
+    state: State<'_, AppState>,
+    path: String,
+    passphrase: String,
+) -> AppResult<ImportSummary> {
+    let vault = Arc::clone(&state.vault);
+    let secrets = Arc::clone(&state.secrets);
+    blocking(move || {
+        let bytes = std::fs::read(&path)?;
+        // Secrets go back to the store best-effort: a machine that cannot save
+        // them should still get the hosts, and the connect path falls back to
+        // asking for a password it cannot find.
+        let write = |id: &HostId, slot: SecretSlot, secret: &str| {
+            if let Err(err) = secrets.set(id, slot, secret) {
+                tracing::warn!(error = %err, "could not store an imported secret");
+            }
+            Ok::<_, AppError>(())
+        };
+        export::import_sealed(&vault, &passphrase, &bytes, write)
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Master password (the secret store)
+// ---------------------------------------------------------------------------
+
+/// What the secret store is and whether it is ready: for a keychain, always
+/// ready; for a master-password file, whether it exists and is unlocked.
+#[tauri::command]
+pub async fn secret_store_status(state: State<'_, AppState>) -> AppResult<SecretStoreStatus> {
+    let secrets = Arc::clone(&state.secrets);
+    blocking(move || Ok(secrets.status())).await
+}
+
+/// Sets the master password for the first time, creating the encrypted file.
+#[tauri::command]
+pub async fn secret_store_create(state: State<'_, AppState>, master: String) -> AppResult<()> {
+    let secrets = Arc::clone(&state.secrets);
+    blocking(move || secrets.create_master(&master)).await
+}
+
+/// Unlocks the encrypted secret file with the master password.
+#[tauri::command]
+pub async fn secret_store_unlock(state: State<'_, AppState>, master: String) -> AppResult<()> {
+    let secrets = Arc::clone(&state.secrets);
+    blocking(move || secrets.unlock(&master)).await
+}
+
+/// Re-seals the secret file under a new master password. The store must be
+/// unlocked first.
+#[tauri::command]
+pub async fn secret_store_change_master(
+    state: State<'_, AppState>,
+    new_master: String,
+) -> AppResult<()> {
+    let secrets = Arc::clone(&state.secrets);
+    blocking(move || secrets.change_master(&new_master)).await
+}
+
+/// Forgets the master password for this session, so saved secrets need it
+/// again before they can be read.
+#[tauri::command]
+pub async fn secret_store_lock(state: State<'_, AppState>) -> AppResult<()> {
+    let secrets = Arc::clone(&state.secrets);
+    blocking(move || secrets.lock()).await
+}
+
+// ---------------------------------------------------------------------------
 // Connecting
 // ---------------------------------------------------------------------------
 
@@ -277,13 +388,14 @@ pub async fn host_connect(
     let exit_forwards = Arc::clone(&state.forwards);
     let exit_app = app.clone();
 
-    let keychain = secrets::available();
+    let can_save = state.secrets.can_save();
     let make_asker = |host: &Host| -> Arc<dyn DynAsker> {
         Arc::new(SavedHostAsker {
             inner: super::ssh::EventAsker::new(app.clone(), Arc::clone(&state.prompts)),
             host_id: host.id.clone(),
             vault: Arc::clone(&state.vault),
-            keychain,
+            secrets: Arc::clone(&state.secrets),
+            can_save,
         })
     };
     let endpoint = |host: &Host| Endpoint {
@@ -363,14 +475,16 @@ fn resolve_chain(vault: &crate::vault::store::Vault, host_id: &str) -> AppResult
     Ok(chain)
 }
 
-/// Answers from the keychain where it can, and from the user where it cannot.
+/// Answers from the secret store where it can, and from the user where it
+/// cannot.
 struct SavedHostAsker {
     inner: super::ssh::EventAsker,
     host_id: HostId,
     vault: Arc<crate::vault::store::Vault>,
-    /// Whether this machine has a keychain at all, decided once at connect
-    /// time rather than per prompt.
-    keychain: bool,
+    secrets: Arc<SecretStore>,
+    /// Whether a secret can be saved at all (a keychain, or an unlocked master
+    /// password file), decided once at connect time rather than per prompt.
+    can_save: bool,
 }
 
 impl SavedHostAsker {
@@ -387,17 +501,18 @@ impl SavedHostAsker {
 
     async fn saved(&self, slot: SecretSlot) -> Option<String> {
         let host = self.host_id.clone();
-        let read = tauri::async_runtime::spawn_blocking(move || secrets::get(&host, slot)).await;
+        let secrets = Arc::clone(&self.secrets);
+        let read = tauri::async_runtime::spawn_blocking(move || secrets.get(&host, slot)).await;
         match read {
             Ok(Ok(secret)) => secret,
             Ok(Err(err)) => {
-                // A locked or missing keychain is a reason to ask the user, not
-                // a reason to fail the connection.
+                // A locked or missing store is a reason to ask the user, not a
+                // reason to fail the connection.
                 tracing::warn!(error = %err, "could not read a saved secret");
                 None
             }
             Err(err) => {
-                tracing::warn!(error = %err, "the keychain read did not complete");
+                tracing::warn!(error = %err, "the secret read did not complete");
                 None
             }
         }
@@ -406,8 +521,9 @@ impl SavedHostAsker {
     async fn remember(&self, slot: SecretSlot, secret: String) {
         let host = self.host_id.clone();
         let vault = Arc::clone(&self.vault);
+        let secrets = Arc::clone(&self.secrets);
         let stored = tauri::async_runtime::spawn_blocking(move || {
-            secrets::set(&host, slot, &secret)?;
+            secrets.set(&host, slot, &secret)?;
             if slot == SecretSlot::Password {
                 vault.set_saved_password(&host, true)?;
             }
@@ -418,7 +534,7 @@ impl SavedHostAsker {
         match stored {
             Ok(Ok(())) => {}
             Ok(Err(err)) => tracing::warn!(error = %err, "could not save a secret"),
-            Err(err) => tracing::warn!(error = %err, "the keychain write did not complete"),
+            Err(err) => tracing::warn!(error = %err, "the secret write did not complete"),
         }
     }
 }
@@ -441,7 +557,7 @@ impl Asker for SavedHostAsker {
         }
 
         // Only offer to remember what there is somewhere to remember.
-        question.can_remember = self.keychain && slot.is_some();
+        question.can_remember = self.can_save && slot.is_some();
         let answer = Asker::secret(&self.inner, question).await?;
 
         if let (Some(slot), Some(secret), true) = (slot, answer.secret.as_ref(), answer.remember) {

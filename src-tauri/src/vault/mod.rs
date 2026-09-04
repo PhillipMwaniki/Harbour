@@ -5,8 +5,10 @@
 //! [`xshell`] read other tools' formats so an existing estate can be brought
 //! across without retyping it.
 
+pub mod export;
 pub mod import;
 pub mod model;
+pub mod secret_file;
 pub mod secrets;
 pub mod ssh_config;
 pub mod store;
