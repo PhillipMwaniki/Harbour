@@ -158,6 +158,25 @@ impl russh::server::Handler for TestServer {
         session.data(channel, GREETING.as_bytes().to_vec())
     }
 
+    /// Runs a one-shot command, as the fleet runner's `exec` does: echoes the
+    /// command on stdout, writes a line on stderr, and exits. A command that
+    /// mentions "fail" exits non-zero, so a test can see a failure surfaced.
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(channel)?;
+        let command = String::from_utf8_lossy(data).into_owned();
+        session.data(channel, format!("ran: {command}\n").into_bytes())?;
+        session.extended_data(channel, 1, b"a warning\n".to_vec())?;
+        let code = if command.contains("fail") { 3 } else { 0 };
+        session.exit_status_request(channel, code)?;
+        session.eof(channel)?;
+        session.close(channel)
+    }
+
     async fn window_change_request(
         &mut self,
         channel: ChannelId,
@@ -1712,4 +1731,77 @@ async fn a_local_forward_carries_a_connection_to_a_remote_target() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(rebound, "the forward should have released its port");
+}
+
+// ---------------------------------------------------------------------------
+// Fleet runner: one-shot exec
+// ---------------------------------------------------------------------------
+
+/// Builds a destination endpoint for `run_command`, the fleet runner's unit.
+fn endpoint(addr: SocketAddr, asker: &Arc<ScriptedAsker>) -> Endpoint {
+    Endpoint {
+        target: SshTarget {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+            user: USER.to_string(),
+        },
+        methods: vec![AuthChoice::Password],
+        asker: dyn_asker(asker),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runs_a_command_and_collects_stdout_stderr_and_the_exit_code() {
+    let server = start_server().await;
+    let known = Arc::new(temp_known_hosts());
+    let asker = ScriptedAsker::trusting(PASSWORD);
+
+    let outcome = client::run_command(Vec::new(), endpoint(server.addr, &asker), known, "uptime")
+        .await
+        .expect("the command should run");
+
+    assert_eq!(String::from_utf8_lossy(&outcome.stdout), "ran: uptime\n");
+    assert_eq!(String::from_utf8_lossy(&outcome.stderr), "a warning\n");
+    assert_eq!(outcome.exit_code, Some(0));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_command_reports_its_non_zero_exit_code() {
+    let server = start_server().await;
+    let known = Arc::new(temp_known_hosts());
+    let asker = ScriptedAsker::trusting(PASSWORD);
+
+    let outcome = client::run_command(Vec::new(), endpoint(server.addr, &asker), known, "do fail")
+        .await
+        .expect("the command should still run");
+
+    assert_eq!(outcome.exit_code, Some(3));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_over_a_jump_reaches_the_destination() {
+    // Two servers: the first bridges direct-tcpip to the second, exactly as the
+    // interactive jump test does, and the command runs on the destination.
+    let bastion = start_server().await;
+    let dest = start_server().await;
+    let known = Arc::new(temp_known_hosts());
+    let bastion_asker = ScriptedAsker::trusting(PASSWORD);
+    let dest_asker = ScriptedAsker::trusting(PASSWORD);
+
+    let jumps = vec![Endpoint {
+        target: SshTarget {
+            host: bastion.addr.ip().to_string(),
+            port: bastion.addr.port(),
+            user: USER.to_string(),
+        },
+        methods: vec![AuthChoice::Password],
+        asker: dyn_asker(&bastion_asker),
+    }];
+
+    let outcome = client::run_command(jumps, endpoint(dest.addr, &dest_asker), known, "id")
+        .await
+        .expect("the command should run through the jump");
+
+    assert_eq!(String::from_utf8_lossy(&outcome.stdout), "ran: id\n");
+    assert_eq!(outcome.exit_code, Some(0));
 }

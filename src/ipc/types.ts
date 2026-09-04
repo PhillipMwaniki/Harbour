@@ -210,6 +210,18 @@ export interface ImportResult {
   hostKeys: number;
 }
 
+/** What running a fleet command on one host produced. */
+export interface FleetResult {
+  hostId: string;
+  name: string;
+  /** The command's exit status, when it ran; `null` when it did not. */
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  /** Set when the host could not be reached, authenticated, or run the command. */
+  error: string | null;
+}
+
 /** What a sealed-vault import added. Everything here is new; nothing was replaced. */
 export interface VaultImportSummary {
   folders: number;

@@ -240,6 +240,18 @@ The file panes can **follow the shell**: the Follow toggle makes the pane track
 the directory the focused terminal reports over OSC 7, remote or local. The
 shell has to emit OSC 7 (most modern bash/zsh setups can be configured to).
 
+## Running on many hosts
+
+**Run on many hosts…** at the foot of the sidebar opens the fleet runner: tick
+the saved hosts you want, type a command, and it is run on each at once - as a
+one-shot `exec`, not a shell - with the output collected. Results fill in one
+host at a time as each finishes, colour-coded by exit status, and clicking a row
+shows its output. The run is non-interactive by design: a host whose key you
+have not trusted yet, or whose password is not saved, comes back as an error
+rather than stopping to ask, so a command across the whole estate is something
+you can start and walk away from. Up to eight hosts run at a time, and jump
+hosts are followed exactly as they are for an interactive connection.
+
 ## Triggers
 
 Under Settings › Triggers, a **trigger** watches a session's output for a

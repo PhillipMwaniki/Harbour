@@ -1,3 +1,4 @@
+pub mod fleet;
 pub mod forward;
 pub mod session;
 pub mod settings;

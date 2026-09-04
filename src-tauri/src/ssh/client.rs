@@ -155,71 +155,13 @@ pub async fn connect_chain<F>(
 where
     F: FnOnce(ExitReason, Option<u32>) + Send + 'static,
 {
-    let cfg = Arc::new(config());
-
-    // The socket to the first host in the chain. Made here, rather than
-    // through `russh::client::connect`, so "no route to host" stays
-    // distinguishable from an SSH-level failure.
-    let first = jumps.first().unwrap_or(&dest);
-    let tcp = tokio::net::TcpStream::connect((first.target.host.as_str(), first.target.port))
-        .await
-        .map_err(|err| AppError::SshConnect {
-            host: first.target.host.clone(),
-            port: first.target.port,
-            reason: err.to_string(),
-        })?;
-    // Terminal input is latency-sensitive and tiny: Nagle would coalesce
-    // keystrokes into visible lag.
-    let _ = tcp.set_nodelay(true);
-    let mut stream: Box<dyn Stream> = Box::new(tcp);
-
-    // Walk the jumps, tunnelling one hop deeper each time. The handles are
-    // kept: dropping one closes every connection nested inside it.
-    let mut hops: Vec<Handle<ClientHandler>> = Vec::with_capacity(jumps.len());
-    for (index, hop) in jumps.iter().enumerate() {
-        let handler = ClientHandler::new(
-            &hop.target,
-            Arc::clone(&known_hosts),
-            Arc::clone(&hop.asker),
-        );
-        let mut session = russh::client::connect_stream(Arc::clone(&cfg), stream, handler).await?;
-        authenticate(&mut session, &hop.target, &hop.methods, hop.asker.as_ref()).await?;
-
-        // The next hop in the chain, which this one dials on our behalf.
-        let next = jumps.get(index + 1).unwrap_or(&dest);
-        let channel = session
-            .channel_open_direct_tcpip(
-                next.target.host.clone(),
-                u32::from(next.target.port),
-                "127.0.0.1",
-                0,
-            )
-            .await
-            .map_err(|err| AppError::SshConnect {
-                host: next.target.host.clone(),
-                port: next.target.port,
-                reason: format!("via {}: {err}", hop.target.label()),
-            })?;
-        stream = Box::new(channel.into_stream());
-        hops.push(session);
-    }
-
-    let accepted = Arc::new(Mutex::new(None));
-    let handler = ClientHandler::new(
-        &dest.target,
-        Arc::clone(&known_hosts),
-        Arc::clone(&dest.asker),
-    )
-    .recording(Arc::clone(&accepted));
-    let mut session = russh::client::connect_stream(cfg, stream, handler).await?;
-
-    let method = authenticate(
-        &mut session,
-        &dest.target,
-        &dest.methods,
-        dest.asker.as_ref(),
-    )
-    .await?;
+    let established = establish(&jumps, &dest, &known_hosts).await?;
+    let Established {
+        session,
+        hops,
+        fingerprint,
+        method,
+    } = established;
 
     let mut channel = session
         .channel_open_session()
@@ -249,11 +191,6 @@ where
     // The jump handles ride along with the session and drop when it ends.
     let running = transport::start(session, channel, pending, Box::new(hops), on_exit);
 
-    let fingerprint = accepted
-        .lock()
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
-
     tracing::info!(
         host = %dest.target.host,
         port = dest.target.port,
@@ -267,6 +204,152 @@ where
         output: running.output,
         fingerprint,
         method,
+    })
+}
+
+/// A connected, authenticated session, before a shell or a command is put on
+/// it. Shared by the interactive path ([`connect_chain`]) and the one-shot
+/// command path ([`run_command`]).
+struct Established {
+    session: Handle<ClientHandler>,
+    /// The jump connections, kept alive so the chain stays up; dropping one
+    /// closes everything nested inside it.
+    hops: Vec<Handle<ClientHandler>>,
+    fingerprint: String,
+    method: &'static str,
+}
+
+/// Connects to `dest` through `jumps`, checking each host key and
+/// authenticating each hop, and returns the live session.
+async fn establish(
+    jumps: &[Endpoint],
+    dest: &Endpoint,
+    known_hosts: &Arc<KnownHosts>,
+) -> AppResult<Established> {
+    let cfg = Arc::new(config());
+
+    // The socket to the first host in the chain. Made here, rather than
+    // through `russh::client::connect`, so "no route to host" stays
+    // distinguishable from an SSH-level failure.
+    let first = jumps.first().unwrap_or(dest);
+    let tcp = tokio::net::TcpStream::connect((first.target.host.as_str(), first.target.port))
+        .await
+        .map_err(|err| AppError::SshConnect {
+            host: first.target.host.clone(),
+            port: first.target.port,
+            reason: err.to_string(),
+        })?;
+    let _ = tcp.set_nodelay(true);
+    let mut stream: Box<dyn Stream> = Box::new(tcp);
+
+    // Walk the jumps, tunnelling one hop deeper each time.
+    let mut hops: Vec<Handle<ClientHandler>> = Vec::with_capacity(jumps.len());
+    for (index, hop) in jumps.iter().enumerate() {
+        let handler =
+            ClientHandler::new(&hop.target, Arc::clone(known_hosts), Arc::clone(&hop.asker));
+        let mut session = russh::client::connect_stream(Arc::clone(&cfg), stream, handler).await?;
+        authenticate(&mut session, &hop.target, &hop.methods, hop.asker.as_ref()).await?;
+
+        let next = jumps.get(index + 1).unwrap_or(dest);
+        let channel = session
+            .channel_open_direct_tcpip(
+                next.target.host.clone(),
+                u32::from(next.target.port),
+                "127.0.0.1",
+                0,
+            )
+            .await
+            .map_err(|err| AppError::SshConnect {
+                host: next.target.host.clone(),
+                port: next.target.port,
+                reason: format!("via {}: {err}", hop.target.label()),
+            })?;
+        stream = Box::new(channel.into_stream());
+        hops.push(session);
+    }
+
+    let accepted = Arc::new(Mutex::new(None));
+    let handler = ClientHandler::new(
+        &dest.target,
+        Arc::clone(known_hosts),
+        Arc::clone(&dest.asker),
+    )
+    .recording(Arc::clone(&accepted));
+    let mut session = russh::client::connect_stream(cfg, stream, handler).await?;
+    let method = authenticate(
+        &mut session,
+        &dest.target,
+        &dest.methods,
+        dest.asker.as_ref(),
+    )
+    .await?;
+
+    let fingerprint = accepted
+        .lock()
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Ok(Established {
+        session,
+        hops,
+        fingerprint,
+        method,
+    })
+}
+
+/// What running one command on a host produced.
+#[derive(Debug, Clone)]
+pub struct CommandOutcome {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    /// The command's exit status, when the server reported one.
+    pub exit_code: Option<u32>,
+}
+
+/// Connects to `dest` (through `jumps`), runs one command, and disconnects.
+///
+/// This is the fleet runner's unit of work. It opens no pty and no shell: it
+/// `exec`s the command, collects stdout and stderr to the end, and lets the
+/// connection close as the session drops. Nothing here is interactive - a host
+/// that would need a prompt (an untrusted key, a password with nowhere to come
+/// from) fails, which is what an unattended run across many hosts wants.
+pub async fn run_command(
+    jumps: Vec<Endpoint>,
+    dest: Endpoint,
+    known_hosts: Arc<KnownHosts>,
+    command: &str,
+) -> AppResult<CommandOutcome> {
+    let established = establish(&jumps, &dest, &known_hosts).await?;
+    let mut channel = established
+        .session
+        .channel_open_session()
+        .await
+        .map_err(|err| AppError::SshChannel(err.to_string()))?;
+
+    channel
+        .exec(true, command)
+        .await
+        .map_err(|err| AppError::SshChannel(err.to_string()))?;
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut exit_code = None;
+    while let Some(message) = channel.wait().await {
+        match message {
+            ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+            // Extended data type 1 is stderr; other types are not used here.
+            ChannelMsg::ExtendedData { data, ext: 1 } => stderr.extend_from_slice(&data),
+            ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status),
+            ChannelMsg::Eof | ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+    // `established` (and its jump hops) drop here, closing the connection.
+
+    Ok(CommandOutcome {
+        stdout,
+        stderr,
+        exit_code,
     })
 }
 

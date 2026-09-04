@@ -166,6 +166,7 @@ id that is no longer waiting - it timed out, or its connection died - returns
 | `secret_store_change_master` | `newMaster: string` | `void` |
 | `secret_store_lock` | - | `void` |
 | `host_connect` | `hostId: string`, `cols: number`, `rows: number` | `SessionInfo` |
+| `fleet_run` | `hostIds: string[]`, `command: string` | `FleetResult[]` |
 
 `vault_tree` returns the whole tree in one call: a few hundred hosts at most,
 so paging it would cost more than it saves.
@@ -263,6 +264,27 @@ type VaultImportSummary = {
 same, except that a saved password is taken from the keychain without asking,
 and a `connection:auth_prompt` for a saved host carries `canRemember: true` so
 the answer can be saved.
+
+`fleet_run` runs one command on many saved hosts at once. Each host is a full
+connection - its own jump chain, host-key check and keychain credentials - on
+which the command is `exec`ed (no pty, no shell) and its stdout, stderr and exit
+status collected. It is **non-interactive**: a host whose key is not already
+trusted, or whose password is not saved and whose agent cannot get in, comes
+back with an `error` rather than raising a prompt - so a run across a whole
+estate never blocks on a dialog. At most eight hosts run at once. Results also
+stream back as `fleet:result` events, one per host as it finishes, and the whole
+set is returned when every host is done.
+
+```ts
+type FleetResult = {
+  hostId: string;
+  name: string;
+  exitCode: number | null; // the command's status, or null if it did not run
+  stdout: string;
+  stderr: string;
+  error: string | null;    // set when the host could not be reached or run it
+};
+```
 
 ### Settings
 

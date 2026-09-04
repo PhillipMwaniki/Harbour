@@ -187,6 +187,7 @@ pub fn run() {
             commands::vault::secret_store_change_master,
             commands::vault::secret_store_lock,
             commands::vault::host_connect,
+            commands::fleet::fleet_run,
             commands::settings::settings_load,
             commands::settings::settings_save,
             commands::settings::settings_reload,

@@ -456,7 +456,10 @@ pub async fn host_connect(
 /// Follows `jump_host_id` hop by hop. A jump that has been deleted, or a loop,
 /// ends the chain rather than failing the connect: a bastion that is gone
 /// leaves its dependents merely direct, which is the safe direction to err.
-fn resolve_chain(vault: &crate::vault::store::Vault, host_id: &str) -> AppResult<Vec<Host>> {
+pub(crate) fn resolve_chain(
+    vault: &crate::vault::store::Vault,
+    host_id: &str,
+) -> AppResult<Vec<Host>> {
     let mut chain = vec![vault.host(host_id)?];
     let mut seen = std::collections::HashSet::from([host_id.to_string()]);
     while let Some(jump) = chain.last().and_then(|host| host.jump_host_id.clone()) {
