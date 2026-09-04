@@ -5,6 +5,46 @@ All notable changes to Harbour are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-04
+
+The MVP: everything Harbour keeps can now be protected at rest and carried
+between machines.
+
+### Added
+
+- **Encrypted vault export and import.** *Export vault* seals the whole tree of
+  folders and hosts into one file; tick *Include saved passwords* and the
+  credentials go in too, making it a full backup rather than a shareable list of
+  hosts. *Import vault* merges such a file back in, appending everything with
+  fresh ids so nothing already saved is overwritten and importing the same file
+  twice makes two copies rather than a conflict. The file is sealed with Argon2id
+  (64 MiB, 3 passes) then XChaCha20-Poly1305 under a passphrase - the only thing
+  that opens it, with no recovery if it is lost.
+- **A master password for machines without a system keychain.** Where there is
+  no keychain, saved passwords go into an encrypted file behind a master
+  password instead of the app being unable to save them at all. It starts locked
+  each session; the master password unlocks it - held in memory and wiped on
+  close - and can be set, changed and entered from the session-manager footer,
+  with a skippable unlock prompt at launch. Secrets are keyed exactly as the
+  keychain keys them, so the two backends are interchangeable and the connect
+  path, imports and exports all work the same on either.
+- **Portable mode.** An empty file named `portable` beside the executable keeps
+  the vault, settings, logs, known hosts and secret file in a `data` folder next
+  to it rather than in your user profile - a copy on a USB stick that leaves
+  nothing on the host and, having no keychain to reach for, carries its own
+  secrets behind the master password. `HARBOUR_PORTABLE` forces it on for a dev
+  build.
+
+### Security
+
+- One authenticated envelope underlies both the secret file and the vault
+  export: Argon2id then XChaCha20-Poly1305, with the salt, nonce and parameters
+  in a versioned, self-describing header, so a file opens itself given only the
+  passphrase and a parameter change never orphans an old file. A wrong passphrase
+  and a tampered file are one indistinguishable failure, and a derived key is
+  zeroized on drop. A secret exists in the clear only for the instant between the
+  store and the seal, and never touches the disk unencrypted.
+
 ## [0.2.0] - 2026-09-03
 
 ### Added

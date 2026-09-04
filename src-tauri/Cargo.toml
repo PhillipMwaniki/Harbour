@@ -1,6 +1,6 @@
 [package]
 name = "harbour"
-version = "0.2.0"
+version = "0.3.0"
 description = "Cross-platform SSH client, terminal and SFTP file manager"
 authors = ["Harbour contributors"]
 license = "MIT"
