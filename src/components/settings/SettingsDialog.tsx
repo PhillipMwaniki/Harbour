@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { highlightImport, logFileName, themeImport } from "@/ipc/settings";
-import { errorMessage, type HighlightRule, type LogFormat, type ThemeSpec } from "@/ipc/types";
+import {
+  errorMessage,
+  type HighlightRule,
+  type LogFormat,
+  type ThemeSpec,
+  type Trigger,
+  type TriggerAction,
+} from "@/ipc/types";
 import { compileRules, newRuleId } from "@/lib/highlight";
+import { compileTriggers } from "@/lib/triggers";
 import {
   actions,
   chordFromEvent,
@@ -15,12 +23,13 @@ import {
 import { allThemes } from "@/lib/themes";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE, useSettings } from "@/stores/settings";
 
-type Section = "appearance" | "keyboard" | "highlights" | "snippets" | "logging";
+type Section = "appearance" | "keyboard" | "highlights" | "triggers" | "snippets" | "logging";
 
 const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "keyboard", label: "Keyboard" },
   { id: "highlights", label: "Highlights" },
+  { id: "triggers", label: "Triggers" },
   { id: "snippets", label: "Snippets" },
   { id: "logging", label: "Logging" },
 ];
@@ -92,6 +101,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           {section === "appearance" && <Appearance />}
           {section === "keyboard" && <Keyboard />}
           {section === "highlights" && <Highlights />}
+          {section === "triggers" && <Triggers />}
           {section === "snippets" && <Snippets />}
           {section === "logging" && <Logging />}
         </div>
@@ -616,6 +626,162 @@ function Highlights() {
       <HighlightImporter />
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Triggers
+// ---------------------------------------------------------------------------
+
+function Triggers() {
+  const triggers = useSettings((state) => state.settings.triggers);
+  const update = useSettings((state) => state.update);
+  const errors = useMemo(() => compileTriggers(triggers).errors, [triggers]);
+
+  const change = (id: string, patch: Partial<Trigger>) =>
+    void update((current) => ({
+      ...current,
+      triggers: current.triggers.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+    }));
+
+  const remove = (id: string) =>
+    void update((current) => ({
+      ...current,
+      triggers: current.triggers.filter((t) => t.id !== id),
+    }));
+
+  const add = () =>
+    void update((current) => ({
+      ...current,
+      triggers: [
+        ...current.triggers,
+        {
+          id: newRuleId(),
+          label: "New trigger",
+          pattern: "",
+          caseSensitive: false,
+          enabled: true,
+          action: { kind: "notify" } as TriggerAction,
+        },
+      ],
+    }));
+
+  return (
+    <div>
+      <p className="mb-2 text-[var(--hb-fg-muted)]">
+        Watch a session&apos;s output for a pattern and act when it appears - notify you, ring the
+        bell, or send a reply. Patterns are regular expressions, matched a line at a time on the
+        output as it streams.
+      </p>
+
+      <div className="space-y-2">
+        {triggers.length === 0 && <p className="text-[var(--hb-fg-muted)]">No triggers yet.</p>}
+
+        {triggers.map((t) => (
+          <div key={t.id} className="rounded border border-[var(--hb-border)] p-2">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                aria-label={`Enable ${t.label}`}
+                checked={t.enabled}
+                onChange={(event) => change(t.id, { enabled: event.target.checked })}
+              />
+              <input
+                aria-label="Trigger name"
+                className="w-40 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
+                value={t.label}
+                onChange={(event) => change(t.id, { label: event.target.value })}
+              />
+              <input
+                aria-label="Pattern"
+                className="flex-1 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 font-mono"
+                value={t.pattern}
+                placeholder="BUILD SUCCESSFUL"
+                onChange={(event) => change(t.id, { pattern: event.target.value })}
+              />
+              <button
+                type="button"
+                aria-label={`Delete ${t.label}`}
+                className="rounded px-2 py-1 text-[var(--hb-fg-muted)] hover:bg-[var(--hb-hover)] hover:text-[var(--hb-fg)]"
+                onClick={() => remove(t.id)}
+              >
+                &minus;
+              </button>
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={t.caseSensitive}
+                  onChange={(event) => change(t.id, { caseSensitive: event.target.checked })}
+                />
+                Match case
+              </label>
+
+              <ActionField action={t.action} onChange={(action) => change(t.id, { action })} />
+            </div>
+
+            {errors[t.id] && (
+              <p role="alert" className="mt-2 text-[var(--hb-danger)]">
+                {errors[t.id]}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={add}
+        className="mt-3 rounded border border-[var(--hb-border)] px-3 py-1 hover:bg-[var(--hb-hover)]"
+      >
+        Add a trigger
+      </button>
+    </div>
+  );
+}
+
+/** The action dropdown, plus a text box when the action is "send". */
+function ActionField({
+  action,
+  onChange,
+}: {
+  action: TriggerAction;
+  onChange: (action: TriggerAction) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[var(--hb-fg-muted)]">Do</span>
+      <select
+        aria-label="Action"
+        className="rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
+        value={action.kind}
+        onChange={(event) => {
+          const kind = event.target.value as TriggerAction["kind"];
+          onChange(kind === "send" ? { kind: "send", text: "" } : { kind });
+        }}
+      >
+        <option value="notify">Notify me</option>
+        <option value="bell">Ring the bell</option>
+        <option value="send">Send text</option>
+      </select>
+      {action.kind === "send" && (
+        <input
+          aria-label="Text to send"
+          className="w-48 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 font-mono"
+          value={action.text}
+          placeholder="y\n"
+          onChange={(event) => onChange({ kind: "send", text: unescapeText(event.target.value) })}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Lets a user type `\n` and `\t` in the send box and have them mean the
+ * control characters, since a real newline cannot be typed into an input. */
+function unescapeText(value: string): string {
+  return value.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r");
 }
 
 /**

@@ -297,6 +297,23 @@ export interface HighlightRule {
   enabled: boolean;
 }
 
+/** What a trigger does when its pattern appears in a session's output. */
+export type TriggerAction =
+  | { kind: "notify" }
+  | { kind: "bell" }
+  | { kind: "send"; text: string };
+
+/** One output trigger: a watched pattern, and what to do when it appears. */
+export interface Trigger {
+  id: string;
+  label: string;
+  /** A regular expression source, without delimiters or flags. */
+  pattern: string;
+  caseSensitive: boolean;
+  enabled: boolean;
+  action: TriggerAction;
+}
+
 /** `raw` keeps the escape sequences; `plain` reads like the screen did. */
 export type LogFormat = "raw" | "plain";
 
@@ -330,6 +347,7 @@ export interface Settings {
   /** Action id -> chords. Absent means the built-in binding; `[]` unbinds. */
   keymap: Record<string, string[]>;
   highlights: HighlightRule[];
+  triggers: Trigger[];
   snippets: Snippet[];
   logging: LoggingSettings;
 }

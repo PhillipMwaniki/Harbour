@@ -231,6 +231,17 @@ The file panes can **follow the shell**: the Follow toggle makes the pane track
 the directory the focused terminal reports over OSC 7, remote or local. The
 shell has to emit OSC 7 (most modern bash/zsh setups can be configured to).
 
+## Triggers
+
+Under Settings › Triggers, a **trigger** watches a session's output for a
+regular expression and acts the moment it appears: a desktop **notification**
+(so you can leave a long build and be told when it prints `BUILD SUCCESSFUL`),
+a **bell**, or **send** text back to the session - a canned `y⏎` for a prompt
+you always answer the same way. Matching runs a line at a time on the streaming
+output, with escape sequences stripped first, so a pattern matches what you see
+rather than the raw colour codes. Triggers are per-pattern, not per-host, and
+apply to every session.
+
 ## Updating
 
 Harbour checks GitHub for a newer release on launch and offers it in a bar

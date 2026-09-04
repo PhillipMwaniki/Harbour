@@ -59,6 +59,9 @@ pub struct Settings {
     /// an action mapped to an empty list is unbound on purpose.
     pub keymap: BTreeMap<String, Vec<String>>,
     pub highlights: Vec<HighlightRule>,
+    /// Watch output for a pattern and do something when it appears - notify,
+    /// ring the bell, or send a command back.
+    pub triggers: Vec<Trigger>,
     /// Saved commands, inserted into a terminal from the snippet palette.
     pub snippets: Vec<Snippet>,
     pub logging: LoggingSettings,
@@ -76,6 +79,7 @@ impl Default for Settings {
             host_themes: BTreeMap::new(),
             keymap: BTreeMap::new(),
             highlights: Vec::new(),
+            triggers: Vec::new(),
             snippets: Vec::new(),
             logging: LoggingSettings::default(),
         }
@@ -102,6 +106,11 @@ impl Settings {
         let mut snippet_ids = std::collections::HashSet::new();
         self.snippets
             .retain(|snippet| !snippet.text.is_empty() && snippet_ids.insert(snippet.id.clone()));
+
+        let mut trigger_ids = std::collections::HashSet::new();
+        self.triggers.retain(|trigger| {
+            !trigger.pattern.is_empty() && trigger_ids.insert(trigger.id.clone())
+        });
     }
 }
 
@@ -202,6 +211,48 @@ impl Default for HighlightRule {
     }
 }
 
+/// One output trigger: a pattern watched in a session's output, and what to do
+/// when it appears. Like a highlight rule, the matching happens in the
+/// frontend against the streaming output; this is only how a trigger is stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Trigger {
+    pub id: String,
+    pub label: String,
+    /// A JavaScript regular expression source, without delimiters or flags.
+    pub pattern: String,
+    pub case_sensitive: bool,
+    pub enabled: bool,
+    pub action: TriggerAction,
+}
+
+impl Default for Trigger {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: String::new(),
+            pattern: String::new(),
+            case_sensitive: false,
+            enabled: true,
+            action: TriggerAction::default(),
+        }
+    }
+}
+
+/// What a trigger does when its pattern appears in output.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TriggerAction {
+    /// A desktop notification naming the session and the line that matched.
+    #[default]
+    Notify,
+    /// Ring the terminal bell.
+    Bell,
+    /// Send `text` back to the session - a canned reply or command. The text is
+    /// sent verbatim; include a trailing newline to run it.
+    Send { text: String },
+}
+
 /// One saved command. `text` is inserted verbatim - trailing newline and all,
 /// so a snippet can run on insert or wait to be edited, exactly as written.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,6 +336,67 @@ mod tests {
         // camelCase on the wire, matching every other IPC payload.
         assert!(json.contains("\"hostThemes\""));
         assert!(json.contains("\"caseSensitive\""));
+    }
+
+    #[test]
+    fn triggers_round_trip_with_a_tagged_action() {
+        let mut settings = Settings::default();
+        settings.triggers.push(Trigger {
+            id: "t1".into(),
+            label: "Build done".into(),
+            pattern: "BUILD SUCCESSFUL".into(),
+            action: TriggerAction::Notify,
+            ..Default::default()
+        });
+        settings.triggers.push(Trigger {
+            id: "t2".into(),
+            label: "Answer the prompt".into(),
+            pattern: "Continue\\?".into(),
+            action: TriggerAction::Send { text: "y\n".into() },
+            ..Default::default()
+        });
+
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("\"triggers\""));
+        // A discriminated union the frontend can switch on.
+        assert!(json.contains("\"kind\":\"notify\""));
+        assert!(json.contains("\"kind\":\"send\""));
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), settings);
+    }
+
+    #[test]
+    fn a_trigger_without_an_action_defaults_to_notify() {
+        let trigger: Trigger = serde_json::from_str(r#"{"id":"t","pattern":"x"}"#).unwrap();
+        assert_eq!(trigger.action, TriggerAction::Notify);
+        assert!(trigger.enabled);
+    }
+
+    #[test]
+    fn sanitise_drops_triggers_with_no_pattern_or_a_duplicate_id() {
+        let mut settings = Settings {
+            triggers: vec![
+                Trigger {
+                    id: "a".into(),
+                    pattern: "error".into(),
+                    ..Default::default()
+                },
+                Trigger {
+                    id: "a".into(),
+                    pattern: "warn".into(),
+                    ..Default::default()
+                },
+                Trigger {
+                    id: "b".into(),
+                    pattern: String::new(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        settings.sanitise();
+        assert_eq!(settings.triggers.len(), 1);
+        assert_eq!(settings.triggers[0].pattern, "error");
     }
 
     #[test]

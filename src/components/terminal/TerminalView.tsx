@@ -17,8 +17,10 @@ import {
 } from "@/ipc/session";
 import { sshConnect } from "@/ipc/ssh";
 import { hostConnect } from "@/ipc/vault";
+import { notify } from "@/ipc/notify";
 import { errorMessage, type SessionInfo } from "@/ipc/types";
 import { compileRules } from "@/lib/highlight";
+import { compileTriggers, TriggerWatcher, type Fired } from "@/lib/triggers";
 import { actionFor, chordFromEvent, resolveBindings } from "@/lib/keymap";
 import { startLog } from "@/lib/sessionLog";
 import { isMultiline, usePaste } from "@/stores/paste";
@@ -31,6 +33,26 @@ import { registerPane } from "./registry";
 import { SearchBar, type SearchOptions } from "./SearchBar";
 
 const encoder = new TextEncoder();
+
+/** Carries out one fired trigger against its session. */
+function act(term: Terminal, info: SessionInfo, fired: Fired): void {
+  const { trigger, line } = fired;
+  switch (trigger.action.kind) {
+    case "notify":
+      void notify(
+        trigger.label.trim() || "Harbour",
+        `${info.title}: ${line.trim()}`.slice(0, 200),
+      );
+      break;
+    case "bell":
+      // Writing BEL rings xterm's bell exactly as the program itself would.
+      term.write("\x07");
+      break;
+    case "send":
+      void sessionWrite(info.sessionId, encoder.encode(trigger.action.text)).catch(() => {});
+      break;
+  }
+}
 
 function isWindows(): boolean {
   return typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
@@ -93,6 +115,7 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
   const fitRef = useRef<FitAddon | null>(null);
   const searchRef = useRef<SearchAddon | null>(null);
   const highlightRef = useRef<HighlightLayer | null>(null);
+  const triggerRef = useRef<TriggerWatcher | null>(null);
 
   const settings = useSettings((state) => state.settings);
   const theme = useMemo(
@@ -100,6 +123,7 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
     [settings, target],
   );
   const { rules } = useMemo(() => compileRules(settings.highlights), [settings.highlights]);
+  const { triggers } = useMemo(() => compileTriggers(settings.triggers), [settings.triggers]);
   const bindings = useMemo(() => resolveBindings(settings.keymap), [settings.keymap]);
 
   const [searchOpen, setSearchOpen] = useState(false);
@@ -113,6 +137,8 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
   settingsRef.current = settings;
   const bindingsRef = useRef(bindings);
   bindingsRef.current = bindings;
+  const triggersRef = useRef(triggers);
+  triggersRef.current = triggers;
   // The target is a fresh object on every render; keeping it out of the effect
   // deps is what stops a re-render from tearing down a live session.
   const targetRef = useRef(target);
@@ -189,10 +215,13 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
     host.addEventListener("paste", onPaste, true);
 
     const highlight = new HighlightLayer(term);
+    const watcher = new TriggerWatcher();
+    watcher.setTriggers(triggersRef.current);
     termRef.current = term;
     fitRef.current = fit;
     searchRef.current = search;
     highlightRef.current = highlight;
+    triggerRef.current = watcher;
     fit.fit();
 
     // Built once the session id exists; until then there is nothing to ack.
@@ -253,11 +282,20 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
 
         acker = new OutputAcker(info.sessionId);
         const sessionAcker = acker;
+        // A streaming decoder so a multi-byte character split across two chunks
+        // is not mangled before the triggers see it.
+        const decoder = new TextDecoder();
         await sessionSubscribe(info.sessionId, (bytes) => {
           if (disposed) return;
           // The ack fires once xterm has actually consumed the chunk, which is
           // what makes the backend's budget a real backpressure signal.
           term.write(bytes, () => sessionAcker.add(bytes.byteLength));
+
+          const watcher = triggerRef.current;
+          if (watcher) {
+            const fired = watcher.feed(decoder.decode(bytes, { stream: true }));
+            for (const event of fired) act(term, info, event);
+          }
         });
       } catch (err) {
         if (disposed) return;
@@ -293,6 +331,7 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
       acker?.dispose();
       for (const d of disposables) d.dispose();
       highlight.dispose();
+      triggerRef.current = null;
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -322,6 +361,10 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
   useEffect(() => {
     highlightRef.current?.setRules(rules);
   }, [rules]);
+
+  useEffect(() => {
+    triggerRef.current?.setTriggers(triggers);
+  }, [triggers]);
 
   // A hidden terminal has no layout, so it cannot be measured. Refit and focus
   // when it comes back into view.
