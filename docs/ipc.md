@@ -183,6 +183,8 @@ id that is no longer waiting - it timed out, or its connection died - returns
 | `secret_store_lock` | - | `void` |
 | `host_connect` | `hostId: string`, `cols: number`, `rows: number` | `SessionInfo` |
 | `fleet_run` | `hostIds: string[]`, `command: string` | `FleetResult[]` |
+| `key_generate` | `path: string`, `passphrase?: string`, `comment?: string` | `GeneratedKey` |
+| `key_deploy` | `hostId: string`, `publicKey: string` | `{ alreadyPresent: boolean }` |
 
 `vault_tree` returns the whole tree in one call: a few hundred hosts at most,
 so paging it would cost more than it saves.
@@ -280,6 +282,17 @@ type VaultImportSummary = {
 same, except that a saved password is taken from the keychain without asking,
 and a `connection:auth_prompt` for a saved host carries `canRemember: true` so
 the answer can be saved.
+
+`key_generate` writes an Ed25519 keypair to `path` (and `<path>.pub`),
+optionally encrypting the private key with `passphrase`; the private key file is
+`0600` on Unix. It returns the public key and its `SHA256:` fingerprint. The
+private key never crosses the IPC boundary - only its path and the public half
+do. `key_deploy` installs a public key into a saved host's `authorized_keys` by
+connecting the way a session does (keychain first, then the password prompt) and
+running an idempotent install command over `exec`; `alreadyPresent` says whether
+the key was already there. The frontend attaches the private key to the host
+(setting `auth.keyPath`) after a successful deploy. `GeneratedKey` is
+`{ path, publicPath, publicKey, fingerprint }`.
 
 `fleet_run` runs one command on many saved hosts at once. Each host is a full
 connection - its own jump chain, host-key check and keychain credentials - on

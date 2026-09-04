@@ -122,6 +122,13 @@ encrypted file behind a **master password** instead (see below). Until you set
 one, it simply asks every time rather than writing a password somewhere you did
 not choose.
 
+**Set up key authentication** in one step: editing a saved host, *Set up key
+authentication…* generates an Ed25519 keypair and installs its public half in
+the host's `authorized_keys`, connecting with your password once to do it. The
+private key never leaves your machine; afterwards the host connects with the
+key. It is `ssh-keygen` + `ssh-copy-id`, as a button, and the install is
+idempotent - running it again never adds a duplicate.
+
 ## Importing an existing estate
 
 Both importers show you everything they found and write nothing until you

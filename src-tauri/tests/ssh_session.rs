@@ -72,6 +72,9 @@ struct TestServer {
     bridged: Arc<Mutex<HashSet<ChannelId>>>,
     /// Served as `/` over SFTP.
     sftp_root: PathBuf,
+    /// A stand-in for the remote `authorized_keys`, so the key-deploy install
+    /// command can be exercised end to end and its idempotency checked.
+    authorized: Arc<Mutex<HashSet<String>>>,
 }
 
 impl russh::server::Server for TestServer {
@@ -169,6 +172,23 @@ impl russh::server::Handler for TestServer {
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         let command = String::from_utf8_lossy(data).into_owned();
+
+        // The key-deploy install command carries our markers; emulate an
+        // authorized_keys so its idempotency can be tested for real.
+        if command.contains("HARBOUR_ADDED") {
+            let key = extract_installed_key(&command);
+            let added = self.authorized.lock().unwrap().insert(key);
+            let marker = if added {
+                "HARBOUR_ADDED"
+            } else {
+                "HARBOUR_PRESENT"
+            };
+            session.data(channel, format!("{marker}\n").into_bytes())?;
+            session.exit_status_request(channel, 0)?;
+            session.eof(channel)?;
+            return session.close(channel);
+        }
+
         session.data(channel, format!("ran: {command}\n").into_bytes())?;
         session.extended_data(channel, 1, b"a warning\n".to_vec())?;
         let code = if command.contains("fail") { 3 } else { 0 };
@@ -297,6 +317,7 @@ async fn start_server_offering(methods: &[MethodKind]) -> RunningServer {
             channels: Arc::new(Mutex::new(HashMap::new())),
             bridged: Arc::new(Mutex::new(HashSet::new())),
             sftp_root: served,
+            authorized: Arc::new(Mutex::new(HashSet::new())),
         };
         let _ = server.run_on_socket(config, &listener).await;
     });
@@ -1804,4 +1825,53 @@ async fn a_command_over_a_jump_reaches_the_destination() {
 
     assert_eq!(String::from_utf8_lossy(&outcome.stdout), "ran: id\n");
     assert_eq!(outcome.exit_code, Some(0));
+}
+
+// ---------------------------------------------------------------------------
+// Key deployment
+// ---------------------------------------------------------------------------
+
+/// Pulls the key out of the install command's `K="..."` assignment, so the
+/// fake server can record what was "installed".
+fn extract_installed_key(command: &str) -> String {
+    let start = command.find("K=\"").map(|i| i + 3).unwrap_or(0);
+    let rest = &command[start..];
+    let end = rest.find('"').unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deploying_a_key_installs_it_once_and_is_idempotent() {
+    use harbour_lib::ssh::keygen;
+
+    let server = start_server().await;
+    let known = Arc::new(temp_known_hosts());
+    let asker = ScriptedAsker::trusting(PASSWORD);
+
+    let public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA harbour@test";
+    let command = keygen::install_command(public_key).unwrap();
+
+    // First deploy adds the key.
+    let first = client::run_command(
+        Vec::new(),
+        endpoint(server.addr, &asker),
+        Arc::clone(&known),
+        &command,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        keygen::read_marker(&String::from_utf8_lossy(&first.stdout)).unwrap(),
+        keygen::Installed::Added
+    );
+
+    // Second deploy finds it already there.
+    let asker2 = ScriptedAsker::trusting(PASSWORD);
+    let second = client::run_command(Vec::new(), endpoint(server.addr, &asker2), known, &command)
+        .await
+        .unwrap();
+    assert_eq!(
+        keygen::read_marker(&String::from_utf8_lossy(&second.stdout)).unwrap(),
+        keygen::Installed::AlreadyPresent
+    );
 }

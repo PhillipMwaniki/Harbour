@@ -30,6 +30,11 @@ binding on every change, and most of them predate the code that will need them.
   backend, never the host's keychain.
 - Never fall back to plaintext storage. Until a master password is set on a
   keychain-less machine, the user is asked every time instead.
+- Key generation writes the private key `0600` and never sends it anywhere; only
+  the public half is deployed. Installing it on a host is an idempotent `exec`
+  over an authenticated connection - it appends to `authorized_keys`, never
+  edits `sshd_config` - and the public key is validated to contain no quote or
+  newline before it is interpolated into the install command.
 - The envelope both the secret file and the vault export seal with is Argon2id
   (m=64 MiB, t=3, one lane, 32-byte key) then XChaCha20-Poly1305; the salt,
   nonce and Argon2 parameters travel in a header behind a magic and a version
