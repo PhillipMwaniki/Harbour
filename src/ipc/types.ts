@@ -362,6 +362,13 @@ export interface Settings {
   triggers: Trigger[];
   snippets: Snippet[];
   logging: LoggingSettings;
+  sync: SyncSettings;
+}
+
+/** Where an encrypted copy of the vault is pushed to and pulled from. */
+export interface SyncSettings {
+  /** A file in a synced folder (Dropbox, OneDrive, iCloud). `null` until set. */
+  path: string | null;
 }
 
 /** What a colour scheme import found. Nothing is saved until the user says. */

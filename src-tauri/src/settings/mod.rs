@@ -65,6 +65,9 @@ pub struct Settings {
     /// Saved commands, inserted into a terminal from the snippet palette.
     pub snippets: Vec<Snippet>,
     pub logging: LoggingSettings,
+    /// Where an encrypted copy of the vault is pushed to and pulled from, for
+    /// keeping it in step across machines through a synced folder.
+    pub sync: SyncSettings,
 }
 
 impl Default for Settings {
@@ -82,6 +85,7 @@ impl Default for Settings {
             triggers: Vec::new(),
             snippets: Vec::new(),
             logging: LoggingSettings::default(),
+            sync: SyncSettings::default(),
         }
     }
 }
@@ -261,6 +265,17 @@ pub struct Snippet {
     pub id: String,
     pub label: String,
     pub text: String,
+}
+
+/// Where the vault is synced. Just a path today; a place for other targets to
+/// hang off later.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SyncSettings {
+    /// A file in a folder something else syncs (Dropbox, OneDrive, iCloud).
+    /// Push writes the encrypted vault here; pull reads it back. `None` until
+    /// the user points it somewhere.
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -154,6 +154,15 @@ can change it from the session-manager footer. The master password is held in
 memory only while unlocked and wiped when Harbour closes; the file on disk is
 never anything but ciphertext.
 
+**Sync** (Settings › Sync) keeps the vault in step across your machines through
+a folder something else already syncs - Dropbox, OneDrive, iCloud. Point it at a
+file in that folder, and **Push** writes an encrypted copy of the whole vault
+there while **Pull** merges it back on another machine. It is the encrypted
+export and import with the path remembered and one click either way; the
+passphrase is the only thing that opens the file and is never stored. Pull
+merges rather than replaces, so run it once per machine to bring another's hosts
+across.
+
 **Portable mode** keeps everything - vault, settings, logs, known hosts, and the
 master-password secret file - in a `data` folder beside the executable instead
 of in your user profile. Turn it on by placing an empty file named `portable`
