@@ -36,6 +36,20 @@ export function sshConnect(args: SshConnectArgs): Promise<SessionInfo> {
   });
 }
 
+/**
+ * Opens a telnet session. Telnet has no authentication or host key of its own,
+ * so this is a single call - whatever login the far end wants happens in the
+ * terminal.
+ */
+export function telnetConnect(
+  host: string,
+  port: number,
+  cols: number,
+  rows: number,
+): Promise<SessionInfo> {
+  return invoke<SessionInfo>("telnet_connect", { host, port, cols, rows });
+}
+
 /** Answers a prompt raised during a connection attempt. */
 export function connectionRespond(
   promptId: string,

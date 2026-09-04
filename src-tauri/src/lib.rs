@@ -10,6 +10,7 @@ pub mod session;
 pub mod settings;
 pub mod ssh;
 pub mod telemetry;
+pub mod telnet;
 pub mod text;
 pub mod transfer;
 pub mod vault;
@@ -163,6 +164,7 @@ pub fn run() {
             commands::shell::shell_list,
             commands::ssh::ssh_connect,
             commands::ssh::connection_respond,
+            commands::telnet::telnet_connect,
             commands::vault::vault_tree,
             commands::vault::vault_create_folder,
             commands::vault::vault_rename_folder,

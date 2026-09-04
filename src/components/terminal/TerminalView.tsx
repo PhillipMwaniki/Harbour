@@ -15,7 +15,7 @@ import {
   sessionSubscribe,
   sessionWrite,
 } from "@/ipc/session";
-import { sshConnect } from "@/ipc/ssh";
+import { sshConnect, telnetConnect } from "@/ipc/ssh";
 import { hostConnect } from "@/ipc/vault";
 import { notify } from "@/ipc/notify";
 import { errorMessage, type SessionInfo } from "@/ipc/types";
@@ -82,6 +82,8 @@ function openSession(target: SessionTarget, cols: number, rows: number): Promise
       return hostConnect(target.hostId, cols, rows);
     case "ssh":
       return sshConnect({ target: target.target, methods: target.methods, cols, rows });
+    case "telnet":
+      return telnetConnect(target.host, target.port, cols, rows);
     case "local":
       return sessionOpen({ shellId: target.shellId, cols, rows });
   }

@@ -15,8 +15,10 @@ pub type SessionId = String;
 pub enum SessionKind {
     /// A local shell attached to a pty.
     Local,
-    /// A shell on an SSH channel. Serial and telnet join this enum later.
+    /// A shell on an SSH channel.
     Ssh,
+    /// A telnet connection over a raw TCP socket.
+    Telnet,
 }
 
 /// What a session is attached to, from the manager's point of view.

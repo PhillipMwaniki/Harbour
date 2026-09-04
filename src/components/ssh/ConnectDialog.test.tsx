@@ -54,6 +54,7 @@ describe("ConnectDialog", () => {
     await typing().click(screen.getByRole("button", { name: "Connect" }));
 
     expect(onConnect).toHaveBeenCalledWith({
+      protocol: "ssh",
       target: { host: "example.com", port: 22, user: "deploy" },
       methods: [{ kind: "agent" }, { kind: "password" }, { kind: "keyboardInteractive" }],
     });
@@ -156,5 +157,32 @@ describe("ConnectDialog", () => {
     await typing().click(screen.getByRole("button", { name: "Browse…" }));
 
     expect(screen.getByDisplayValue("~/.ssh/existing")).toBeInTheDocument();
+  });
+
+  it("connects over telnet with just a host and a port", async () => {
+    const onConnect = vi.fn();
+    render(<ConnectDialog open onConnect={onConnect} onCancel={vi.fn()} />);
+
+    await typing().click(screen.getByRole("button", { name: "TELNET" }));
+    // The default port swaps to 23, and the SSH-only fields are gone.
+    expect(screen.getByLabelText("Port")).toHaveValue("23");
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Private key/)).not.toBeInTheDocument();
+
+    await typing().type(screen.getByLabelText("Host"), "bbs.example.com");
+    await typing().click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(onConnect).toHaveBeenCalledWith({
+      protocol: "telnet",
+      host: "bbs.example.com",
+      port: 23,
+    });
+  });
+
+  it("does not require a username for telnet", async () => {
+    render(<ConnectDialog open onConnect={vi.fn()} onCancel={vi.fn()} />);
+    await typing().click(screen.getByRole("button", { name: "TELNET" }));
+    await typing().type(screen.getByLabelText("Host"), "bbs.example.com");
+    expect(screen.getByRole("button", { name: "Connect" })).toBeEnabled();
   });
 });

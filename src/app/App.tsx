@@ -230,11 +230,15 @@ export default function App() {
 
   const startSsh = useCallback((request: ConnectRequest) => {
     setModal({ kind: "none" });
-    useSessions.getState().openTab({
-      kind: "ssh",
-      target: request.target,
-      methods: request.methods,
-    });
+    if (request.protocol === "telnet") {
+      useSessions.getState().openTab({ kind: "telnet", host: request.host, port: request.port });
+    } else {
+      useSessions.getState().openTab({
+        kind: "ssh",
+        target: request.target,
+        methods: request.methods,
+      });
+    }
   }, []);
 
   const connectHost = useCallback((host: Host) => {
@@ -382,12 +386,16 @@ export default function App() {
   const selected = useVault((state) => state.selected);
   const hostThemes = useSettings((state) => state.settings.hostThemes);
 
-  // The remote pane follows the focused terminal. A local shell has no remote
-  // side, and the dock says so rather than showing the last host's files.
+  // The remote pane follows the focused terminal. Only SSH sessions carry
+  // SFTP; a local shell or a telnet connection has no remote side, and the
+  // dock says so rather than showing the last host's files.
   const activeTab = tabs.find((tab) => tab.tabId === activeTabId);
   const focusedTerminal = activeTab ? activePane(activeTab) : undefined;
   const remoteSession =
-    focusedTerminal && focusedTerminal.target.kind !== "local" ? focusedTerminal.sessionId : null;
+    focusedTerminal &&
+    (focusedTerminal.target.kind === "ssh" || focusedTerminal.target.kind === "host")
+      ? focusedTerminal.sessionId
+      : null;
 
   return (
     <div className="flex h-screen w-screen flex-col bg-[var(--hb-bg)] text-[var(--hb-fg)]">

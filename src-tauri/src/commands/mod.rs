@@ -4,5 +4,6 @@ pub mod settings;
 pub mod sftp;
 pub mod shell;
 pub mod ssh;
+pub mod telnet;
 pub mod transfer;
 pub mod vault;

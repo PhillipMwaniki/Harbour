@@ -6,10 +6,14 @@ import type { AuthChoice, SshTarget } from "@/ipc/types";
 /** OpenSSH's default, and what every "just connect" case wants. */
 const DEFAULT_PORT = 22;
 
-export interface ConnectRequest {
-  target: SshTarget;
-  methods: AuthChoice[];
-}
+export type ConnectRequest =
+  | { protocol: "ssh"; target: SshTarget; methods: AuthChoice[] }
+  | { protocol: "telnet"; host: string; port: number };
+
+/** Telnet's well-known port, used when the protocol is switched to it. */
+const TELNET_PORT = 23;
+
+type Protocol = "ssh" | "telnet";
 
 interface Props {
   open: boolean;
@@ -26,6 +30,7 @@ interface Props {
  * actually gets that far.
  */
 export function ConnectDialog({ open, onConnect, onCancel }: Props) {
+  const [protocol, setProtocol] = useState<Protocol>("ssh");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(String(DEFAULT_PORT));
   const [user, setUser] = useState("");
@@ -39,16 +44,33 @@ export function ConnectDialog({ open, onConnect, onCancel }: Props) {
 
   if (!open) return null;
 
+  const isTelnet = protocol === "telnet";
   const parsedPort = Number.parseInt(port, 10);
   const portValid = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535;
-  const canConnect = host.trim() !== "" && user.trim() !== "" && portValid;
+  // Telnet has no username: the login is whatever the far end prompts for.
+  const canConnect = host.trim() !== "" && portValid && (isTelnet || user.trim() !== "");
+
+  /** Switching protocol swaps the default port if the user hasn't changed it. */
+  const switchProtocol = (next: Protocol) => {
+    setProtocol(next);
+    setPort((current) => {
+      if (next === "telnet" && current === String(DEFAULT_PORT)) return String(TELNET_PORT);
+      if (next === "ssh" && current === String(TELNET_PORT)) return String(DEFAULT_PORT);
+      return current;
+    });
+  };
 
   const submit = () => {
     if (!canConnect) return;
-    onConnect({
-      target: { host: host.trim(), port: parsedPort, user: user.trim() },
-      methods: buildMethods({ useAgent, keyPath: keyPath.trim() }),
-    });
+    if (isTelnet) {
+      onConnect({ protocol: "telnet", host: host.trim(), port: parsedPort });
+    } else {
+      onConnect({
+        protocol: "ssh",
+        target: { host: host.trim(), port: parsedPort, user: user.trim() },
+        methods: buildMethods({ useAgent, keyPath: keyPath.trim() }),
+      });
+    }
   };
 
   const browseForKey = async () => {
@@ -65,7 +87,7 @@ export function ConnectDialog({ open, onConnect, onCancel }: Props) {
     >
       <form
         role="dialog"
-        aria-label="New SSH session"
+        aria-label="New session"
         className="w-96 rounded border border-[var(--hb-border)] bg-[var(--hb-panel)] p-4 shadow-xl"
         onSubmit={(event) => {
           event.preventDefault();
@@ -75,7 +97,27 @@ export function ConnectDialog({ open, onConnect, onCancel }: Props) {
           if (event.key === "Escape") onCancel();
         }}
       >
-        <h2 className="mb-3 text-sm font-medium">New SSH session</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-medium">New {isTelnet ? "telnet" : "SSH"} session</h2>
+          <div className="flex overflow-hidden rounded border border-[var(--hb-border)] text-xs">
+            {(["ssh", "telnet"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={protocol === option}
+                onClick={() => switchProtocol(option)}
+                className={[
+                  "px-2 py-0.5",
+                  protocol === option
+                    ? "bg-[var(--hb-accent)] text-[var(--hb-bg)]"
+                    : "hover:bg-[var(--hb-hover)]",
+                ].join(" ")}
+              >
+                {option.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <label className="mb-2 block text-xs" htmlFor="ssh-host">
           Host
@@ -90,18 +132,20 @@ export function ConnectDialog({ open, onConnect, onCancel }: Props) {
         />
 
         <div className="mb-3 flex gap-3">
-          <div className="flex-1">
-            <label className="mb-2 block text-xs" htmlFor="ssh-user">
-              Username
-            </label>
-            <input
-              id="ssh-user"
-              value={user}
-              onChange={(event) => setUser(event.target.value)}
-              className="w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-xs"
-            />
-          </div>
-          <div className="w-20">
+          {!isTelnet && (
+            <div className="flex-1">
+              <label className="mb-2 block text-xs" htmlFor="ssh-user">
+                Username
+              </label>
+              <input
+                id="ssh-user"
+                value={user}
+                onChange={(event) => setUser(event.target.value)}
+                className="w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-xs"
+              />
+            </div>
+          )}
+          <div className={isTelnet ? "flex-1" : "w-20"}>
             <label className="mb-2 block text-xs" htmlFor="ssh-port">
               Port
             </label>
@@ -116,38 +160,43 @@ export function ConnectDialog({ open, onConnect, onCancel }: Props) {
           </div>
         </div>
 
-        <label className="mb-2 flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            checked={useAgent}
-            onChange={(event) => setUseAgent(event.target.checked)}
-          />
-          Try the SSH agent first
-        </label>
+        {!isTelnet && (
+          <>
+            <label className="mb-2 flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={useAgent}
+                onChange={(event) => setUseAgent(event.target.checked)}
+              />
+              Try the SSH agent first
+            </label>
 
-        <label className="mb-2 block text-xs" htmlFor="ssh-key">
-          Private key <span className="text-[var(--hb-fg-muted)]">(optional)</span>
-        </label>
-        <div className="mb-3 flex gap-2">
-          <input
-            id="ssh-key"
-            value={keyPath}
-            onChange={(event) => setKeyPath(event.target.value)}
-            placeholder="~/.ssh/id_ed25519"
-            className="w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-xs"
-          />
-          <button
-            type="button"
-            onClick={() => void browseForKey()}
-            className="shrink-0 rounded border border-[var(--hb-border)] px-2 py-1 text-xs hover:bg-[var(--hb-hover)]"
-          >
-            Browse…
-          </button>
-        </div>
+            <label className="mb-2 block text-xs" htmlFor="ssh-key">
+              Private key <span className="text-[var(--hb-fg-muted)]">(optional)</span>
+            </label>
+            <div className="mb-3 flex gap-2">
+              <input
+                id="ssh-key"
+                value={keyPath}
+                onChange={(event) => setKeyPath(event.target.value)}
+                placeholder="~/.ssh/id_ed25519"
+                className="w-full rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => void browseForKey()}
+                className="shrink-0 rounded border border-[var(--hb-border)] px-2 py-1 text-xs hover:bg-[var(--hb-hover)]"
+              >
+                Browse…
+              </button>
+            </div>
+          </>
+        )}
 
         <p className="mb-3 text-xs text-[var(--hb-fg-muted)]">
-          Passwords and key passphrases are asked for during the connection, and only if they
-          are needed.
+          {isTelnet
+            ? "Telnet is unencrypted and asks for no credentials here; whatever login the host wants happens in the terminal."
+            : "Passwords and key passphrases are asked for during the connection, and only if they are needed."}
         </p>
 
         <div className="flex justify-end gap-2">

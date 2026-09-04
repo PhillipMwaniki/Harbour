@@ -5,7 +5,7 @@
  * and in `docs/ipc.md` in the same commit.
  */
 
-export type SessionKind = "local" | "ssh";
+export type SessionKind = "local" | "ssh" | "telnet";
 
 export interface SessionInfo {
   sessionId: string;

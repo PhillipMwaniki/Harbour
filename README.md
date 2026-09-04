@@ -65,7 +65,7 @@ else - CI installs each on the distribution it is for before a release goes
 out. On Arch, `harbour-bin` on the AUR repackages the release and `harbour`
 builds it from source.
 
-## Connecting over SSH
+## Connecting over SSH and telnet
 
 **Ctrl+Shift+N**, or *SSH connection…* in the tab-bar menu. Give a host, a
 username and a port; Harbour tries the SSH agent first, then a key file if you
@@ -82,6 +82,13 @@ already trust from a terminal connects without a prompt. An unknown host shows
 its SHA-256 fingerprint and offers to remember it; a changed key shows both
 fingerprints and defaults to rejecting. Harbour never writes to your OpenSSH
 files: keys it learns go to its own `known_hosts` in the app config directory.
+
+The connect dialog has a **SSH / Telnet** switch. Telnet is a raw TCP
+connection with no encryption and no credentials of its own - pick it for a
+switch console, a BBS or a legacy daemon, give it a host and a port, and
+whatever login the far end wants happens in the terminal. Harbour handles the
+telnet option negotiation and reports the window size; there is no SFTP or port
+forwarding on a telnet session.
 
 ## Saved sessions
 
