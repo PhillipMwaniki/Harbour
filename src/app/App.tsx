@@ -52,6 +52,7 @@ import { useFiles } from "@/stores/files";
 import { useForwards } from "@/stores/forwards";
 import { useUpdate } from "@/stores/update";
 import { useTransfers } from "@/stores/transfers";
+import { useBroadcast } from "@/stores/broadcast";
 import { activePane, focusedPane, paneForSession, useSessions, type Pane } from "@/stores/sessions";
 import { applyThemeVariables, useSettings, useTerminalTheme } from "@/stores/settings";
 import { selectedHost, useVault } from "@/stores/vault";
@@ -77,6 +78,7 @@ export default function App() {
   const keymap = useSettings((state) => state.settings.keymap);
   const filesOpen = useFiles((state) => state.open);
   const forwardsOpen = useForwards((state) => state.open);
+  const broadcasting = useBroadcast((state) => state.active);
   const theme = useTerminalTheme();
   const [banner, setBanner] = useState<string | null>(null);
   const [secretStore, setSecretStore] = useState<SecretStoreStatus | null>(null);
@@ -182,6 +184,7 @@ export default function App() {
       // server that is no longer connected.
       useFiles.getState().forget(event.sessionId);
       useForwards.getState().forget(event.sessionId);
+      useBroadcast.getState().prune(event.sessionId);
       if (!lost) state.closePane(found.tab.tabId, found.pane.paneId);
     });
     return () => {
@@ -247,6 +250,22 @@ export default function App() {
 
   const connectHost = useCallback((host: Host) => {
     useSessions.getState().openTab({ kind: "host", hostId: host.id, name: host.name });
+  }, []);
+
+  // Broadcast input to every live pane in the active tab, or turn it off.
+  const toggleBroadcast = useCallback(() => {
+    const bc = useBroadcast.getState();
+    if (bc.active) {
+      bc.stop();
+      return;
+    }
+    const state = useSessions.getState();
+    const tab = state.tabs.find((entry) => entry.tabId === state.activeTabId);
+    if (!tab) return;
+    const ids = Object.values(tab.panes)
+      .map((pane) => pane.sessionId)
+      .filter((id): id is string => id !== null);
+    bc.start(ids);
   }, []);
 
   const saveHost = useCallback(
@@ -415,10 +434,12 @@ export default function App() {
         onToggleSessions={() => setSidebar((open) => !open)}
         onToggleFiles={() => useFiles.getState().toggle()}
         onToggleForwards={() => useForwards.getState().toggle()}
+        onToggleBroadcast={toggleBroadcast}
         onSettings={() => setModal({ kind: "settings" })}
         sessionsOpen={sidebar}
         filesOpen={filesOpen}
         forwardsOpen={forwardsOpen}
+        broadcasting={broadcasting}
       />
 
       <UpdateBanner />

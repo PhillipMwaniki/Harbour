@@ -269,6 +269,17 @@ The file panes can **follow the shell**: the Follow toggle makes the pane track
 the directory the focused terminal reports over OSC 7, remote or local. The
 shell has to emit OSC 7 (most modern bash/zsh setups can be configured to).
 
+## Broadcast input
+
+The **Broadcast** toggle in the toolbar mirrors what you type to every pane in
+the current tab at once — run the same interactive command on ten servers and
+watch each respond. Broadcasting panes get an unmistakable red frame and a
+`BROADCAST` badge, because sending a command to ten boxes by accident is the
+disaster to design against. Output is never merged: each terminal shows its own,
+so divergence is obvious. Split a tab into panes on several hosts, toggle
+Broadcast, and type once. It is input-only and turns off the moment one pane is
+left.
+
 ## Running on many hosts
 
 **Run on many hosts…** at the foot of the sidebar opens the fleet runner: tick
