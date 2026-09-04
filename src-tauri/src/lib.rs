@@ -4,6 +4,7 @@ pub mod edit;
 pub mod error;
 pub mod files;
 pub mod glob;
+pub mod portable;
 pub mod prompt;
 pub mod session;
 pub mod settings;
@@ -70,19 +71,29 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let log_dir = app
-                .path()
-                .app_log_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("harbour"));
+            // Portable mode keeps everything beside the executable; otherwise
+            // the OS's per-user config and log directories are used.
+            let portable = portable::base_dir();
+            let (config_dir, log_dir) = match &portable {
+                Some(base) => (base.clone(), base.join("logs")),
+                None => (
+                    app.path()
+                        .app_config_dir()
+                        .unwrap_or_else(|_| std::env::temp_dir().join("harbour")),
+                    app.path()
+                        .app_log_dir()
+                        .unwrap_or_else(|_| std::env::temp_dir().join("harbour")),
+                ),
+            };
+
             // The guard must outlive the app, otherwise buffered log lines are
             // dropped on exit.
             let guard = telemetry::init(&log_dir);
             app.manage(LogGuard(guard));
 
-            let config_dir = app
-                .path()
-                .app_config_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("harbour"));
+            if portable.is_some() {
+                tracing::info!(dir = %config_dir.display(), "running in portable mode");
+            }
 
             // A vault that will not open must not stop the app from starting:
             // local shells and ad-hoc SSH work without it, and an in-memory
@@ -116,7 +127,14 @@ pub fn run() {
                 // ~/.ssh: the user's file is read but never written to.
                 known_hosts: Arc::new(KnownHosts::new(config_dir.join("known_hosts"))),
                 vault: Arc::new(vault),
-                secrets: Arc::new(SecretStore::detect(config_dir.join("secrets.vault"))),
+                // Portable mode must not reach for the host's keychain: its
+                // secrets belong in the file beside it, behind a master
+                // password. A normal install prefers the keychain when present.
+                secrets: Arc::new(if portable.is_some() {
+                    SecretStore::file_backed(config_dir.join("secrets.vault"))
+                } else {
+                    SecretStore::detect(config_dir.join("secrets.vault"))
+                }),
                 settings: Arc::new(SettingsStore::open(config_dir.join("settings.json"))),
                 log_dir: log_dir.clone(),
                 connections: Connections::new(),

@@ -16,16 +16,30 @@ binding on every change, and most of them predate the code that will need them.
 ## Secrets
 
 - Secrets never go in SQLite or the settings store. The host record holds only
-  a flag saying whether an entry is expected; the secret itself lives in the OS
-  keychain (Windows Credential Manager, macOS Keychain, Secret Service), keyed
-  by the host's id and the slot (`password` or `passphrase`).
-- If the keyring is unavailable, prompt the user. Never fall back to plaintext
-  storage.
-- Optional master password wraps a random vault key held in the keyring; with
-  it enabled, secrets are additionally encrypted at rest with
-  XChaCha20-Poly1305 rather than trusting the OS keychain alone.
-- Vault export uses Argon2id (m=64 MB, t=3) to derive a key, then
-  XChaCha20-Poly1305. The format carries a version byte.
+  a flag saying whether an entry is expected; the secret itself lives in the
+  secret store, keyed by the host's id and the slot (`password` or
+  `passphrase`).
+- The secret store is the OS keychain (Windows Credential Manager, macOS
+  Keychain, Secret Service) where the machine has one. Where it does not, the
+  store is an encrypted file behind a **master password** the user sets: a map
+  of secrets, keyed exactly as the keychain keys them, sealed with the envelope
+  below. It starts locked each session; the master password unlocks it and is
+  held in memory - zeroized on drop - only while unlocked. Every write re-seals
+  the whole file via a temp file and rename, so a crash cannot corrupt it and
+  the plaintext never touches the disk. Portable mode always uses this file
+  backend, never the host's keychain.
+- Never fall back to plaintext storage. Until a master password is set on a
+  keychain-less machine, the user is asked every time instead.
+- The envelope both the secret file and the vault export seal with is Argon2id
+  (m=64 MiB, t=3, one lane, 32-byte key) then XChaCha20-Poly1305; the salt,
+  nonce and Argon2 parameters travel in a header behind a magic and a version
+  byte, so a file opens itself given only the passphrase and a parameter change
+  never orphans an old file. A wrong passphrase and a tampered file are one
+  indistinguishable authentication failure. See `src-tauri/src/crypto.rs`.
+- Vault export seals the folder tree and hosts - and, only when the user asks,
+  the saved secrets - with that envelope. Import reissues every id as it lands,
+  so it merges rather than overwrites, and a secret exists in the clear only for
+  the instant between the store and the seal.
 
 ## Logging
 
@@ -93,17 +107,16 @@ relaunches itself while sessions are live.
 
 ## Current state
 
-Milestone 4 adds session logging and a settings file. The master-password and
-export rules above still describe milestone 8.
-
 Implemented:
 
 - The vault. SQLite holds folders and hosts and nothing else; every secret is
-  in the OS keychain, addressed by host id. Deleting a host or a folder takes
-  the matching keychain entries with it, so nothing is orphaned. There is no
-  plaintext fallback: with no keychain the user is asked every time, which is
-  an inconvenience, where writing a password to a file they did not ask for
-  would be a betrayal.
+  in the secret store, addressed by host id. Deleting a host or a folder takes
+  the matching store entries with it, so nothing is orphaned. There is no
+  plaintext fallback: on a machine with no keychain and no master password set,
+  the user is asked every time, which is an inconvenience, where writing a
+  password to a file they did not ask for would be a betrayal.
+- The master-password secret file, encrypted vault export/import, and portable
+  mode described under **Secrets** above (milestone 8).
 - Host key trust, in full. `~/.ssh/known_hosts` and `known_hosts2` are read -
   including hashed entries, wildcards, negations and `@revoked` - and Harbour
   appends only to its own file under the app config directory. An unknown key
