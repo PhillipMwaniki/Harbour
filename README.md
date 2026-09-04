@@ -1,4 +1,8 @@
-# Harbour
+<p align="center">
+  <img src="assets/app-icon.png" alt="Harbour" width="128" height="128" />
+</p>
+
+<h1 align="center">Harbour</h1>
 
 A cross-platform SSH client that puts the terminal, the session manager and an
 SFTP file manager in one window, sharing one connection per host. Local-first:
