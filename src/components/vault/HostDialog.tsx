@@ -52,6 +52,7 @@ export function HostDialog({
   const [usePassword, setUsePassword] = useState(host?.auth.usePassword ?? true);
   const [themeOverride, setThemeOverride] = useState(themeId ?? "");
   const [jumpHostId, setJumpHostId] = useState(host?.jumpHostId ?? "");
+  const [guarded, setGuarded] = useState(host?.guarded ?? false);
   const [keyAuthOpen, setKeyAuthOpen] = useState(false);
   const themes = useThemeCatalogue();
   const hostnameRef = useRef<HTMLInputElement | null>(null);
@@ -82,6 +83,7 @@ export function HostDialog({
         usePassword,
       },
       jumpHostId: jumpHostId || null,
+      guarded,
     }, themeOverride || null);
   };
 
@@ -282,6 +284,20 @@ export function HostDialog({
             </p>
           )}
         </fieldset>
+
+        <label className="mb-3 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={guarded}
+            onChange={(event) => setGuarded(event.target.checked)}
+          />
+          <span>
+            Guard this host
+            <span className="block text-[var(--hb-fg-muted)]">
+              Confirm destructive commands before they run on it.
+            </span>
+          </span>
+        </label>
 
         {host?.hasSavedPassword && onForgetSecrets && (
           <div className="mb-3 flex items-center justify-between text-[var(--hb-fg-muted)]">

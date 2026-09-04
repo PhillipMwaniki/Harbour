@@ -138,6 +138,8 @@ export interface Host {
   jumpHostId: string | null;
   /** Whether the OS keychain is expected to hold a password for this host. */
   hasSavedPassword: boolean;
+  /** Confirm destructive commands before they run on this host. */
+  guarded: boolean;
   position: number;
 }
 
@@ -151,6 +153,7 @@ export interface HostInput {
   description: string | null;
   auth: HostAuth;
   jumpHostId: string | null;
+  guarded: boolean;
 }
 
 export interface VaultTree {
@@ -326,6 +329,17 @@ export interface Trigger {
   action: TriggerAction;
 }
 
+/** One guardrail: a destructive-command pattern confirmed before it runs on a
+ * guarded host. */
+export interface Guardrail {
+  id: string;
+  label: string;
+  /** A regular expression source, without delimiters or flags. */
+  pattern: string;
+  caseSensitive: boolean;
+  enabled: boolean;
+}
+
 /** `raw` keeps the escape sequences; `plain` reads like the screen did. */
 export type LogFormat = "raw" | "plain";
 
@@ -361,6 +375,7 @@ export interface Settings {
   highlights: HighlightRule[];
   triggers: Trigger[];
   snippets: Snippet[];
+  guardrails: Guardrail[];
   logging: LoggingSettings;
   sync: SyncSettings;
 }

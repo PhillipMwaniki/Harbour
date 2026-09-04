@@ -189,6 +189,11 @@ id that is no longer waiting - it timed out, or its connection died - returns
 `vault_tree` returns the whole tree in one call: a few hundred hosts at most,
 so paging it would cost more than it saves.
 
+A `Host` also carries `guarded`: when set, the frontend confirms a destructive
+command (matched against `settings.guardrails`) before it runs on that host -
+today at the fleet runner, where a batch mistake is most costly. It is a plain
+host field, set through `vault_create_host` / `vault_update_host` like the rest.
+
 **No command returns a secret.** A `Host` says which methods to try and whether
 a password is expected (`hasSavedPassword`); the password itself is in the
 secret store, keyed by host id, and only ever moves between the store and the

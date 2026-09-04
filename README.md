@@ -269,6 +269,18 @@ The file panes can **follow the shell**: the Follow toggle makes the pane track
 the directory the focused terminal reports over OSC 7, remote or local. The
 shell has to emit OSC 7 (most modern bash/zsh setups can be configured to).
 
+## Guardrails
+
+Mark a host **guarded** in the host editor and Harbour confirms before a
+destructive command runs on it — `rm -rf`, `mkfs`, `dd of=/dev/…`, `shutdown`,
+a force-push, `DROP TABLE` and the like, out of the box, editable under Settings
+› Guardrails. The check runs where Harbour holds the exact command: the
+**fleet runner** confirms before a matching command touches any guarded host,
+naming the rule and the hosts. A confirm is cheap, so the rules err toward
+asking. (Guarding typed input as you type is a shell-integration follow-up; the
+batch path — where a wrong command hits many production boxes at once — is
+covered now.)
+
 ## Broadcast input
 
 The **Broadcast** toggle in the toolbar mirrors what you type to every pane in

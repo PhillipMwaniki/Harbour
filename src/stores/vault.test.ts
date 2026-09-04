@@ -25,6 +25,7 @@ function host(id: string, folderId: string | null = null): Host {
     auth: { useAgent: true, keyPath: null, usePassword: true },
     jumpHostId: null,
     hasSavedPassword: false,
+    guarded: false,
     position: 0,
   };
 }

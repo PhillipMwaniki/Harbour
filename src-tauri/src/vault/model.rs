@@ -96,6 +96,10 @@ pub struct Host {
     /// "forget password" without a keychain read, which on macOS can raise an
     /// authorisation prompt of its own.
     pub has_saved_password: bool,
+    /// Confirm destructive commands before they run on this host - the
+    /// production safeguard. Matching happens in the frontend against the
+    /// guardrail rules; this only marks the host as one to guard.
+    pub guarded: bool,
     pub position: i64,
 }
 
@@ -130,6 +134,8 @@ pub struct HostInput {
     pub auth: HostAuth,
     #[serde(default)]
     pub jump_host_id: Option<HostId>,
+    #[serde(default)]
+    pub guarded: bool,
 }
 
 impl HostInput {
@@ -226,6 +232,7 @@ mod tests {
             description: Some("   ".into()),
             auth: HostAuth::default(),
             jump_host_id: None,
+            guarded: false,
         }
         .normalised();
 
@@ -246,6 +253,7 @@ mod tests {
             description: None,
             auth: HostAuth::default(),
             jump_host_id: None,
+            guarded: false,
         }
         .normalised();
 

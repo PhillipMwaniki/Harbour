@@ -22,6 +22,7 @@ function existing(overrides: Partial<Host> = {}): Host {
     auth: { useAgent: false, keyPath: "~/.ssh/id_ed25519", usePassword: true },
     jumpHostId: null,
     hasSavedPassword: false,
+    guarded: false,
     position: 0,
     ...overrides,
   };
@@ -62,6 +63,7 @@ describe("HostDialog", () => {
         description: null,
         auth: { useAgent: true, keyPath: null, usePassword: true },
         jumpHostId: null,
+        guarded: false,
       },
       // No theme override: the host looks like everything else.
       null,
