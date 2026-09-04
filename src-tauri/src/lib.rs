@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod crypto;
 pub mod edit;
 pub mod error;
 pub mod files;
