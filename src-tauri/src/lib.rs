@@ -6,6 +6,7 @@ pub mod files;
 pub mod glob;
 pub mod portable;
 pub mod prompt;
+pub mod serial;
 pub mod session;
 pub mod settings;
 pub mod ssh;
@@ -165,6 +166,8 @@ pub fn run() {
             commands::ssh::ssh_connect,
             commands::ssh::connection_respond,
             commands::telnet::telnet_connect,
+            commands::serial::serial_ports,
+            commands::serial::serial_connect,
             commands::vault::vault_tree,
             commands::vault::vault_create_folder,
             commands::vault::vault_rename_folder,

@@ -26,7 +26,9 @@ export type SessionTarget =
   /** A host from the vault. Credentials come from the keychain, not from here. */
   | { kind: "host"; hostId: string; name: string }
   /** A raw telnet connection. No auth of its own; the login is in-terminal. */
-  | { kind: "telnet"; host: string; port: number };
+  | { kind: "telnet"; host: string; port: number }
+  /** A serial console on a local port. */
+  | { kind: "serial"; path: string; baud: number };
 
 export const LOCAL_DEFAULT: SessionTarget = { kind: "local" };
 
@@ -139,6 +141,9 @@ export function provisionalTitle(target: SessionTarget, shells: ShellSpec[]): st
   }
   if (target.kind === "telnet") {
     return target.port === 23 ? target.host : `${target.host}:${target.port}`;
+  }
+  if (target.kind === "serial") {
+    return `${target.path} @ ${target.baud}`;
   }
   return shells.find((shell) => shell.id === target.shellId)?.label ?? "Terminal";
 }

@@ -83,12 +83,17 @@ its SHA-256 fingerprint and offers to remember it; a changed key shows both
 fingerprints and defaults to rejecting. Harbour never writes to your OpenSSH
 files: keys it learns go to its own `known_hosts` in the app config directory.
 
-The connect dialog has a **SSH / Telnet** switch. Telnet is a raw TCP
+The connect dialog has a **SSH / Telnet / Serial** switch. Telnet is a raw TCP
 connection with no encryption and no credentials of its own - pick it for a
 switch console, a BBS or a legacy daemon, give it a host and a port, and
 whatever login the far end wants happens in the terminal. Harbour handles the
 telnet option negotiation and reports the window size; there is no SFTP or port
 forwarding on a telnet session.
+
+**Serial** opens a console straight onto a local port - a router being flashed,
+a microcontroller, anything on a USB-to-serial cable. Pick the port from the
+list (Refresh re-scans) and a baud rate, and you have a terminal on the wire.
+There is no login and no encryption; it is a direct byte pipe.
 
 ## Saved sessions
 

@@ -19,6 +19,8 @@ pub enum SessionKind {
     Ssh,
     /// A telnet connection over a raw TCP socket.
     Telnet,
+    /// A serial console on a local port.
+    Serial,
 }
 
 /// What a session is attached to, from the manager's point of view.

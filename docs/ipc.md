@@ -106,6 +106,8 @@ WSL distribution; elsewhere `$SHELL` followed by the usual suspects.
 | `ssh_connect` | `target: SshTarget`, `methods: AuthChoice[]`, `cols: number`, `rows: number` | `SessionInfo` |
 | `connection_respond` | `promptId: string`, `answer: object` | `void` |
 | `telnet_connect` | `host: string`, `port: number`, `cols: number`, `rows: number` | `SessionInfo` |
+| `serial_ports` | - | `SerialPortInfo[]` |
+| `serial_connect` | `path: string`, `baud: number` | `SessionInfo` |
 
 `telnet_connect` opens a raw TCP telnet session. It has no authentication or
 host key of its own - whatever login the far end wants happens in the terminal -
@@ -114,6 +116,20 @@ so it is a single call with no round trips. The returned `SessionInfo` has
 `session_close` work exactly as for the other kinds. `port` `0` means 23. The
 telnet negotiation (option offers, window size) is handled in the core and never
 reaches the terminal; there is no SFTP or port forwarding on a telnet session.
+
+`serial_ports` lists the serial ports attached now; `serial_connect` opens one
+at `baud` and returns a `SessionInfo` with `kind: "serial"`. A serial line is a
+plain byte pipe: `session_resize` is accepted but does nothing (there is no
+window size), and there is no SFTP or forwarding. `session_close` stops the
+reader and releases the port.
+
+```ts
+type SerialPortInfo = {
+  path: string;            // COM3, /dev/ttyUSB0
+  kind: string;            // "USB" | "Bluetooth" | "PCI" | "Unknown"
+  product?: string;        // a USB device's product string, when it has one
+};
+```
 
 `ssh_connect` resolves only once the session is live. The host key and
 credential round-trips happen *inside* the call, as events, so the frontend has

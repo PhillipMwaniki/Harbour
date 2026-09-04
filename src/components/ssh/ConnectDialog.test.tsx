@@ -8,6 +8,12 @@ vi.mock("@/ipc/dialog", () => ({
   pickPrivateKey: (...args: unknown[]) => pickPrivateKey(...args),
 }));
 
+const serialPorts = vi.fn();
+vi.mock("@/ipc/ssh", async (importActual) => ({
+  ...(await importActual<typeof import("@/ipc/ssh")>()),
+  serialPorts: () => serialPorts(),
+}));
+
 import { buildMethods, ConnectDialog } from "./ConnectDialog";
 
 describe("buildMethods", () => {
@@ -184,5 +190,33 @@ describe("ConnectDialog", () => {
     await typing().click(screen.getByRole("button", { name: "TELNET" }));
     await typing().type(screen.getByLabelText("Host"), "bbs.example.com");
     expect(screen.getByRole("button", { name: "Connect" })).toBeEnabled();
+  });
+
+  it("opens a serial console from a listed port and baud rate", async () => {
+    serialPorts.mockResolvedValue([
+      { path: "COM3", kind: "USB", product: "USB Serial" },
+      { path: "COM4", kind: "USB" },
+    ]);
+    const onConnect = vi.fn();
+    render(<ConnectDialog open onConnect={onConnect} onCancel={vi.fn()} />);
+
+    await typing().click(screen.getByRole("button", { name: "SERIAL" }));
+    // The port list loads and the SSH/telnet fields are gone.
+    expect(await screen.findByRole("option", { name: /COM3/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Host")).not.toBeInTheDocument();
+
+    await typing().selectOptions(screen.getByLabelText("Baud"), "9600");
+    await typing().click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(onConnect).toHaveBeenCalledWith({ protocol: "serial", path: "COM3", baud: 9600 });
+  });
+
+  it("cannot connect a serial session when no port is found", async () => {
+    serialPorts.mockResolvedValue([]);
+    render(<ConnectDialog open onConnect={vi.fn()} onCancel={vi.fn()} />);
+
+    await typing().click(screen.getByRole("button", { name: "SERIAL" }));
+    expect(await screen.findByRole("option", { name: "No ports found" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
   });
 });

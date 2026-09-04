@@ -234,6 +234,8 @@ export default function App() {
     setModal({ kind: "none" });
     if (request.protocol === "telnet") {
       useSessions.getState().openTab({ kind: "telnet", host: request.host, port: request.port });
+    } else if (request.protocol === "serial") {
+      useSessions.getState().openTab({ kind: "serial", path: request.path, baud: request.baud });
     } else {
       useSessions.getState().openTab({
         kind: "ssh",

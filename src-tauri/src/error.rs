@@ -100,6 +100,9 @@ pub enum AppError {
     #[error("telnet: {0}")]
     Telnet(String),
 
+    #[error("serial: {0}")]
+    Serial(String),
+
     #[error("{0}")]
     Crypto(String),
 
@@ -147,6 +150,7 @@ impl AppError {
             AppError::Edit(_) => "EDIT_ERROR",
             AppError::Forward(_) => "FORWARD_ERROR",
             AppError::Telnet(_) => "TELNET_ERROR",
+            AppError::Serial(_) => "SERIAL_ERROR",
             AppError::Crypto(_) => "CRYPTO_ERROR",
             AppError::PromptNotFound(_) => "PROMPT_NOT_FOUND",
             AppError::PromptTimedOut => "PROMPT_TIMED_OUT",
