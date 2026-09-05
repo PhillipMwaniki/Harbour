@@ -22,6 +22,7 @@ export type ActionId =
   | "pane.previous"
   | "tab.next"
   | "tab.previous"
+  | "palette.open"
   | "sessions.toggle"
   | "files.toggle"
   | "forwards.toggle"
@@ -78,6 +79,7 @@ export const actions: ActionSpec[] = [
     defaults: ["Ctrl+Shift+Tab", "Ctrl+PageUp"],
   },
   { id: "search.open", label: "Find in the terminal", group: "View", defaults: ["Ctrl+Shift+F"] },
+  { id: "palette.open", label: "Command palette", group: "View", defaults: ["Ctrl+K"] },
   {
     id: "sessions.toggle",
     label: "Show or hide the session manager",
