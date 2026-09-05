@@ -2,7 +2,10 @@ import { useMemo, useState } from "react";
 
 import { fleetRun, onFleetResult } from "@/ipc/fleet";
 import { errorMessage, type FleetResult, type Host } from "@/ipc/types";
+import { compileGuardrails, firstMatch } from "@/lib/guardrails";
+import { useSettings } from "@/stores/settings";
 import { useVault } from "@/stores/vault";
+import { GuardrailDialog } from "./GuardrailDialog";
 
 interface Props {
   onClose: () => void;
@@ -23,12 +26,16 @@ type RowState = "pending" | FleetResult;
  */
 export function FleetDialog({ onClose }: Props) {
   const hosts = useVault((state) => state.tree.hosts);
+  const guardrailRules = useSettings((state) => state.settings.guardrails);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [command, setCommand] = useState("");
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<Map<string, RowState>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [guard, setGuard] = useState<{ ruleLabel: string; hosts: string[] } | null>(null);
+
+  const guardrails = useMemo(() => compileGuardrails(guardrailRules).rules, [guardrailRules]);
 
   const sorted = useMemo(
     () => [...hosts].sort((a, b) => a.name.localeCompare(b.name)),
@@ -48,10 +55,23 @@ export function FleetDialog({ onClose }: Props) {
   const toggleAll = () =>
     setSelected(allSelected ? new Set() : new Set(sorted.map((host) => host.id)));
 
+  // Runs, unless the command trips a guardrail on a selected guarded host - in
+  // which case it asks first.
   const run = async () => {
-    const ids = sorted.filter((host) => selected.has(host.id)).map((host) => host.id);
-    if (ids.length === 0 || command.trim() === "") return;
+    const chosen = sorted.filter((host) => selected.has(host.id));
+    if (chosen.length === 0 || command.trim() === "") return;
 
+    const tripped = firstMatch(command.trim(), guardrails);
+    const guardedHosts = chosen.filter((host) => host.guarded);
+    if (tripped && guardedHosts.length > 0) {
+      setGuard({ ruleLabel: tripped.label, hosts: guardedHosts.map((host) => host.name) });
+      return;
+    }
+    await doRun(chosen.map((host) => host.id));
+  };
+
+  const doRun = async (ids: string[]) => {
+    if (ids.length === 0) return;
     setRunning(true);
     setError(null);
     setExpanded(new Set());
@@ -202,6 +222,20 @@ export function FleetDialog({ onClose }: Props) {
           </button>
         </div>
       </div>
+
+      {guard && (
+        <GuardrailDialog
+          command={command.trim()}
+          ruleLabel={guard.ruleLabel}
+          hosts={guard.hosts}
+          onCancel={() => setGuard(null)}
+          onConfirm={() => {
+            setGuard(null);
+            const ids = sorted.filter((host) => selected.has(host.id)).map((host) => host.id);
+            void doRun(ids);
+          }}
+        />
+      )}
     </div>
   );
 }

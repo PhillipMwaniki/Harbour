@@ -17,9 +17,11 @@ interface Props {
   onSettings: () => void;
   onToggleFiles: () => void;
   onToggleForwards: () => void;
+  onToggleBroadcast: () => void;
   sessionsOpen: boolean;
   filesOpen: boolean;
   forwardsOpen: boolean;
+  broadcasting: boolean;
 }
 
 /** What the hover tooltip says, which is where a dead pane explains itself. */
@@ -48,9 +50,11 @@ export function TabBar({
   onSettings,
   onToggleFiles,
   onToggleForwards,
+  onToggleBroadcast,
   sessionsOpen,
   filesOpen,
   forwardsOpen,
+  broadcasting,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -230,6 +234,18 @@ export function TabBar({
         onClick={onToggleForwards}
       >
         Forwards
+      </button>
+
+      <button
+        type="button"
+        aria-label="Toggle broadcast input"
+        aria-pressed={broadcasting}
+        title="Broadcast input to every pane in this tab"
+        className="border-l border-[var(--hb-border)] px-3 text-xs hover:bg-[var(--hb-hover)]"
+        style={broadcasting ? { color: "var(--hb-danger)", fontWeight: 600 } : undefined}
+        onClick={onToggleBroadcast}
+      >
+        Broadcast
       </button>
 
       <ThemePicker />

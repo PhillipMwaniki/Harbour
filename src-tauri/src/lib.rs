@@ -191,6 +191,8 @@ pub fn run() {
             commands::vault::secret_store_lock,
             commands::vault::host_connect,
             commands::fleet::fleet_run,
+            commands::keys::key_generate,
+            commands::keys::key_deploy,
             commands::settings::settings_load,
             commands::settings::settings_save,
             commands::settings::settings_reload,

@@ -122,6 +122,13 @@ encrypted file behind a **master password** instead (see below). Until you set
 one, it simply asks every time rather than writing a password somewhere you did
 not choose.
 
+**Set up key authentication** in one step: editing a saved host, *Set up key
+authentication…* generates an Ed25519 keypair and installs its public half in
+the host's `authorized_keys`, connecting with your password once to do it. The
+private key never leaves your machine; afterwards the host connects with the
+key. It is `ssh-keygen` + `ssh-copy-id`, as a button, and the install is
+idempotent - running it again never adds a duplicate.
+
 ## Importing an existing estate
 
 Both importers show you everything they found and write nothing until you
@@ -261,6 +268,29 @@ are not interrupted.
 The file panes can **follow the shell**: the Follow toggle makes the pane track
 the directory the focused terminal reports over OSC 7, remote or local. The
 shell has to emit OSC 7 (most modern bash/zsh setups can be configured to).
+
+## Guardrails
+
+Mark a host **guarded** in the host editor and Harbour confirms before a
+destructive command runs on it — `rm -rf`, `mkfs`, `dd of=/dev/…`, `shutdown`,
+a force-push, `DROP TABLE` and the like, out of the box, editable under Settings
+› Guardrails. The check runs where Harbour holds the exact command: the
+**fleet runner** confirms before a matching command touches any guarded host,
+naming the rule and the hosts. A confirm is cheap, so the rules err toward
+asking. (Guarding typed input as you type is a shell-integration follow-up; the
+batch path — where a wrong command hits many production boxes at once — is
+covered now.)
+
+## Broadcast input
+
+The **Broadcast** toggle in the toolbar mirrors what you type to every pane in
+the current tab at once — run the same interactive command on ten servers and
+watch each respond. Broadcasting panes get an unmistakable red frame and a
+`BROADCAST` badge, because sending a command to ten boxes by accident is the
+disaster to design against. Output is never merged: each terminal shows its own,
+so divergence is obvious. Split a tab into panes on several hosts, toggle
+Broadcast, and type once. It is input-only and turns off the moment one pane is
+left.
 
 ## Running on many hosts
 

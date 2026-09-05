@@ -5,6 +5,7 @@ import { highlightImport, logFileName, themeImport } from "@/ipc/settings";
 import { exportVault, importVault } from "@/ipc/vault";
 import {
   errorMessage,
+  type Guardrail,
   type HighlightRule,
   type LogFormat,
   type ThemeSpec,
@@ -13,6 +14,7 @@ import {
 } from "@/ipc/types";
 import { compileRules, newRuleId } from "@/lib/highlight";
 import { compileTriggers } from "@/lib/triggers";
+import { compileGuardrails } from "@/lib/guardrails";
 import {
   actions,
   chordFromEvent,
@@ -31,6 +33,7 @@ type Section =
   | "keyboard"
   | "highlights"
   | "triggers"
+  | "guardrails"
   | "snippets"
   | "logging"
   | "sync";
@@ -40,6 +43,7 @@ const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: "keyboard", label: "Keyboard" },
   { id: "highlights", label: "Highlights" },
   { id: "triggers", label: "Triggers" },
+  { id: "guardrails", label: "Guardrails" },
   { id: "snippets", label: "Snippets" },
   { id: "logging", label: "Logging" },
   { id: "sync", label: "Sync" },
@@ -113,6 +117,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           {section === "keyboard" && <Keyboard />}
           {section === "highlights" && <Highlights />}
           {section === "triggers" && <Triggers />}
+          {section === "guardrails" && <Guardrails />}
           {section === "snippets" && <Snippets />}
           {section === "logging" && <Logging />}
           {section === "sync" && <Sync />}
@@ -794,6 +799,106 @@ function ActionField({
  * control characters, since a real newline cannot be typed into an input. */
 function unescapeText(value: string): string {
   return value.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r");
+}
+
+// ---------------------------------------------------------------------------
+// Guardrails
+// ---------------------------------------------------------------------------
+
+function Guardrails() {
+  const rules = useSettings((state) => state.settings.guardrails);
+  const update = useSettings((state) => state.update);
+  const errors = useMemo(() => compileGuardrails(rules).errors, [rules]);
+
+  const change = (id: string, patch: Partial<Guardrail>) =>
+    void update((current) => ({
+      ...current,
+      guardrails: current.guardrails.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+    }));
+
+  const remove = (id: string) =>
+    void update((current) => ({
+      ...current,
+      guardrails: current.guardrails.filter((r) => r.id !== id),
+    }));
+
+  const add = () =>
+    void update((current) => ({
+      ...current,
+      guardrails: [
+        ...current.guardrails,
+        { id: newRuleId(), label: "New rule", pattern: "", caseSensitive: false, enabled: true },
+      ],
+    }));
+
+  return (
+    <div>
+      <p className="mb-2 text-[var(--hb-fg-muted)]">
+        On a host marked <em>guarded</em> (in the host editor), a command matching one of these is
+        confirmed before it runs. Patterns are regular expressions. A confirm is cheap, so these err
+        toward asking.
+      </p>
+
+      <div className="space-y-2">
+        {rules.length === 0 && <p className="text-[var(--hb-fg-muted)]">No rules.</p>}
+
+        {rules.map((rule) => (
+          <div key={rule.id} className="rounded border border-[var(--hb-border)] p-2">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                aria-label={`Enable ${rule.label}`}
+                checked={rule.enabled}
+                onChange={(event) => change(rule.id, { enabled: event.target.checked })}
+              />
+              <input
+                aria-label="Rule name"
+                className="w-40 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1"
+                value={rule.label}
+                onChange={(event) => change(rule.id, { label: event.target.value })}
+              />
+              <input
+                aria-label="Pattern"
+                className="flex-1 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 font-mono"
+                value={rule.pattern}
+                placeholder="\\brm\\s+.*-[rf]"
+                onChange={(event) => change(rule.id, { pattern: event.target.value })}
+              />
+              <label className="flex items-center gap-1 text-[var(--hb-fg-muted)]">
+                <input
+                  type="checkbox"
+                  checked={rule.caseSensitive}
+                  onChange={(event) => change(rule.id, { caseSensitive: event.target.checked })}
+                />
+                Aa
+              </label>
+              <button
+                type="button"
+                aria-label={`Delete ${rule.label}`}
+                className="rounded px-2 py-1 text-[var(--hb-fg-muted)] hover:bg-[var(--hb-hover)] hover:text-[var(--hb-fg)]"
+                onClick={() => remove(rule.id)}
+              >
+                &minus;
+              </button>
+            </div>
+            {errors[rule.id] && (
+              <p role="alert" className="mt-2 text-[var(--hb-danger)]">
+                {errors[rule.id]}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={add}
+        className="mt-3 rounded border border-[var(--hb-border)] px-3 py-1 hover:bg-[var(--hb-hover)]"
+      >
+        Add a rule
+      </button>
+    </div>
+  );
 }
 
 /**

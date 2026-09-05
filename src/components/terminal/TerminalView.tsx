@@ -26,6 +26,7 @@ import { startLog } from "@/lib/sessionLog";
 import { isMultiline, usePaste } from "@/stores/paste";
 import { pathFromOsc7 } from "@/lib/cwd";
 import { defaultFontFamily, type Theme } from "@/lib/themes";
+import { useBroadcast, fanOut } from "@/stores/broadcast";
 import { useSessions, type SessionTarget } from "@/stores/sessions";
 import { themeForHost, useSettings } from "@/stores/settings";
 import { HighlightLayer } from "./highlightLayer";
@@ -133,6 +134,10 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
   const [searchOpen, setSearchOpen] = useState(false);
   const [results, setResults] = useState<{ index: number; count: number } | null>(null);
   const [badPattern, setBadPattern] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const broadcasting = useBroadcast(
+    (state) => sessionId !== null && state.active && state.members.includes(sessionId),
+  );
 
   // Read inside the mount effect without making the session depend on them.
   const themeRef = useRef(theme);
@@ -246,6 +251,7 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
         const info = await openSession(targetRef.current, term.cols, term.rows);
         if (disposed) return;
         useSessions.getState().attachSession(tabId, paneId, info);
+        setSessionId(info.sessionId);
 
         // "Log every session" has to start here rather than in the keymap:
         // this is the first moment the session exists and has a title.
@@ -258,13 +264,19 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
 
         disposables.push(
           term.onData((data) => {
-            void sessionWrite(info.sessionId, encoder.encode(data)).catch(() => {});
+            const bytes = encoder.encode(data);
+            // With broadcast on, a member pane's input goes to every member.
+            for (const id of fanOut(info.sessionId)) {
+              void sessionWrite(id, bytes).catch(() => {});
+            }
           }),
           term.onBinary((data) => {
             // Binary events carry one byte per code unit, not UTF-8.
             const bytes = new Uint8Array(data.length);
             for (let i = 0; i < data.length; i += 1) bytes[i] = data.charCodeAt(i) & 0xff;
-            void sessionWrite(info.sessionId, bytes).catch(() => {});
+            for (const id of fanOut(info.sessionId)) {
+              void sessionWrite(id, bytes).catch(() => {});
+            }
           }),
           term.onResize(({ cols, rows }) => {
             void sessionResize(info.sessionId, cols, rows).catch(() => {});
@@ -426,6 +438,18 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
         className="h-full w-full overflow-hidden px-2 py-1"
         data-testid={`terminal-${paneId}`}
       />
+      {broadcasting && (
+        <>
+          {/* An unmistakable frame: input here goes to every broadcast pane. */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 z-10 ring-2 ring-inset ring-[var(--hb-danger)]"
+          />
+          <span className="pointer-events-none absolute right-2 top-1 z-10 rounded bg-[var(--hb-danger)] px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-white">
+            BROADCAST
+          </span>
+        </>
+      )}
       {searchOpen && (
         <SearchBar
           onFind={find}

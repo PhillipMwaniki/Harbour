@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { pickPrivateKey } from "@/ipc/dialog";
 import type { Folder, Host, HostInput } from "@/ipc/types";
 import { useThemeCatalogue } from "@/stores/settings";
+import { KeyAuthDialog } from "./KeyAuthDialog";
 
 interface Props {
   /** The host being edited, or `null` when adding a new one. */
@@ -51,6 +52,8 @@ export function HostDialog({
   const [usePassword, setUsePassword] = useState(host?.auth.usePassword ?? true);
   const [themeOverride, setThemeOverride] = useState(themeId ?? "");
   const [jumpHostId, setJumpHostId] = useState(host?.jumpHostId ?? "");
+  const [guarded, setGuarded] = useState(host?.guarded ?? false);
+  const [keyAuthOpen, setKeyAuthOpen] = useState(false);
   const themes = useThemeCatalogue();
   const hostnameRef = useRef<HTMLInputElement | null>(null);
 
@@ -80,6 +83,7 @@ export function HostDialog({
         usePassword,
       },
       jumpHostId: jumpHostId || null,
+      guarded,
     }, themeOverride || null);
   };
 
@@ -250,6 +254,19 @@ export function HostDialog({
                 Browse…
               </button>
             </div>
+            {host ? (
+              <button
+                type="button"
+                onClick={() => setKeyAuthOpen(true)}
+                className="mt-1 rounded text-xs text-[var(--hb-accent)] hover:underline"
+              >
+                Set up key authentication…
+              </button>
+            ) : (
+              <p className="mt-1 text-xs text-[var(--hb-fg-muted)]">
+                Save the host first to generate and install a key for it.
+              </p>
+            )}
           </Field>
 
           <label className="flex items-center gap-2">
@@ -267,6 +284,20 @@ export function HostDialog({
             </p>
           )}
         </fieldset>
+
+        <label className="mb-3 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={guarded}
+            onChange={(event) => setGuarded(event.target.checked)}
+          />
+          <span>
+            Guard this host
+            <span className="block text-[var(--hb-fg-muted)]">
+              Confirm destructive commands before they run on it.
+            </span>
+          </span>
+        </label>
 
         {host?.hasSavedPassword && onForgetSecrets && (
           <div className="mb-3 flex items-center justify-between text-[var(--hb-fg-muted)]">
@@ -298,6 +329,19 @@ export function HostDialog({
           </button>
         </div>
       </form>
+
+      {keyAuthOpen && host && (
+        <KeyAuthDialog
+          host={host}
+          onCancel={() => setKeyAuthOpen(false)}
+          onDone={(privateKeyPath) => {
+            // The host now authenticates with the key; point the form at it and
+            // make sure the agent/key path is tried. The dialog stays open so
+            // the user sees the result, and closing it is theirs to do.
+            setKeyPath(privateKeyPath);
+          }}
+        />
+      )}
     </div>
   );
 }

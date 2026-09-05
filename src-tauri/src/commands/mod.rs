@@ -1,5 +1,6 @@
 pub mod fleet;
 pub mod forward;
+pub mod keys;
 pub mod serial;
 pub mod session;
 pub mod settings;

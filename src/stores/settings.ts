@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS: Settings = {
   highlights: [],
   triggers: [],
   snippets: [],
+  guardrails: [],
   logging: {
     directory: null,
     format: "plain",

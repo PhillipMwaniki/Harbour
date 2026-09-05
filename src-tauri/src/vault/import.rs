@@ -313,6 +313,8 @@ pub fn apply(
                 use_password: candidate.uses_password,
             },
             jump_host_id: None,
+            // Imports never pre-guard a host; the user opts in afterwards.
+            guarded: false,
         };
         let host = vault.create_host(input.clone())?;
         by_name.insert(candidate.name.clone(), host.id.clone());

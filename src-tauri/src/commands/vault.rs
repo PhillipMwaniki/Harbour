@@ -478,6 +478,47 @@ pub(crate) fn resolve_chain(
     Ok(chain)
 }
 
+/// Resolves a saved host into the endpoints a connection needs: the
+/// destination and the jumps behind it, each with a saved-host asker that reads
+/// the keychain and falls back to prompting.
+///
+/// Shared by `host_connect` and the key deployer, so both reach a host the same
+/// way. Returns `(dest, jumps)` with the jumps in dial order (outermost first).
+pub(crate) async fn resolve_endpoints(
+    app: &AppHandle,
+    state: &AppState,
+    host_id: &str,
+) -> AppResult<(Endpoint, Vec<Endpoint>)> {
+    let vault = Arc::clone(&state.vault);
+    let lookup = host_id.to_string();
+    let chain = blocking(move || resolve_chain(&vault, &lookup)).await?;
+
+    for hop in &chain {
+        if hop.auth.methods().is_empty() {
+            return Err(AppError::Vault(format!(
+                "{} has no authentication method enabled",
+                hop.name
+            )));
+        }
+    }
+
+    let can_save = state.secrets.can_save();
+    let endpoint = |host: &Host| Endpoint {
+        target: host.target(),
+        methods: host.auth.methods(),
+        asker: Arc::new(SavedHostAsker {
+            inner: super::ssh::EventAsker::new(app.clone(), Arc::clone(&state.prompts)),
+            host_id: host.id.clone(),
+            vault: Arc::clone(&state.vault),
+            secrets: Arc::clone(&state.secrets),
+            can_save,
+        }),
+    };
+    let dest = endpoint(&chain[0]);
+    let jumps: Vec<Endpoint> = chain[1..].iter().rev().map(endpoint).collect();
+    Ok((dest, jumps))
+}
+
 /// Answers from the secret store where it can, and from the user where it
 /// cannot.
 struct SavedHostAsker {

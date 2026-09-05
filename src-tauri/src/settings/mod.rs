@@ -64,6 +64,9 @@ pub struct Settings {
     pub triggers: Vec<Trigger>,
     /// Saved commands, inserted into a terminal from the snippet palette.
     pub snippets: Vec<Snippet>,
+    /// Destructive-command patterns confirmed before they run on a guarded
+    /// host. Matched in the frontend, like highlights and triggers.
+    pub guardrails: Vec<Guardrail>,
     pub logging: LoggingSettings,
     /// Where an encrypted copy of the vault is pushed to and pulled from, for
     /// keeping it in step across machines through a synced folder.
@@ -84,6 +87,7 @@ impl Default for Settings {
             highlights: Vec::new(),
             triggers: Vec::new(),
             snippets: Vec::new(),
+            guardrails: default_guardrails(),
             logging: LoggingSettings::default(),
             sync: SyncSettings::default(),
         }
@@ -115,6 +119,10 @@ impl Settings {
         self.triggers.retain(|trigger| {
             !trigger.pattern.is_empty() && trigger_ids.insert(trigger.id.clone())
         });
+
+        let mut guardrail_ids = std::collections::HashSet::new();
+        self.guardrails
+            .retain(|rule| !rule.pattern.is_empty() && guardrail_ids.insert(rule.id.clone()));
     }
 }
 
@@ -255,6 +263,79 @@ pub enum TriggerAction {
     /// Send `text` back to the session - a canned reply or command. The text is
     /// sent verbatim; include a trailing newline to run it.
     Send { text: String },
+}
+
+/// One guardrail: a pattern that, on a guarded host, makes Harbour confirm
+/// before the command runs. Matched in the frontend, like a highlight rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Guardrail {
+    pub id: String,
+    pub label: String,
+    /// A JavaScript regular expression source, without delimiters or flags.
+    pub pattern: String,
+    pub case_sensitive: bool,
+    pub enabled: bool,
+}
+
+impl Default for Guardrail {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: String::new(),
+            pattern: String::new(),
+            case_sensitive: false,
+            enabled: true,
+        }
+    }
+}
+
+/// The built-in guardrails, present on a fresh install and for any settings
+/// file that predates them. Deliberately blunt: a confirm dialog is cheap, so
+/// erring toward asking is the point.
+fn default_guardrails() -> Vec<Guardrail> {
+    let rule = |id: &str, label: &str, pattern: &str| Guardrail {
+        id: id.to_string(),
+        label: label.to_string(),
+        pattern: pattern.to_string(),
+        case_sensitive: false,
+        enabled: true,
+    };
+    vec![
+        rule(
+            "recursive-delete",
+            "Recursive delete",
+            r"\brm\s+.*-[a-zA-Z]*[rf]",
+        ),
+        rule("make-filesystem", "Make a filesystem", r"\bmkfs\b"),
+        rule(
+            "write-to-disk",
+            "Write straight to a disk",
+            r"\bdd\b.*\bof=/dev/",
+        ),
+        rule(
+            "redirect-to-disk",
+            "Redirect over a disk",
+            r">\s*/dev/(sd|nvme|vd|mmcblk)",
+        ),
+        rule(
+            "power-off",
+            "Power off or reboot",
+            r"\b(shutdown|reboot|halt|poweroff)\b",
+        ),
+        rule("recursive-chmod", "Recursive chmod", r"\bchmod\s+-R\b"),
+        rule("recursive-chown", "Recursive chown", r"\bchown\s+-R\b"),
+        rule(
+            "force-push",
+            "Force-push a branch",
+            r"\bgit\s+push\b.*(--force|\s-f\b)",
+        ),
+        rule(
+            "drop-database",
+            "Drop a table or database",
+            r"\bDROP\s+(TABLE|DATABASE)\b",
+        ),
+    ]
 }
 
 /// One saved command. `text` is inserted verbatim - trailing newline and all,
