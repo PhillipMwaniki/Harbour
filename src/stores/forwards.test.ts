@@ -18,6 +18,7 @@ function forward(id: string, overrides: Partial<ForwardInfo> = {}): ForwardInfo 
   return {
     id,
     sessionId: "s1",
+    kind: "local",
     bindAddress: "127.0.0.1",
     localPort: 8080,
     host: "localhost",

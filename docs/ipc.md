@@ -524,6 +524,7 @@ type EditInfo = {
 | Command | Arguments | Returns |
 | --- | --- | --- |
 | `forward_open_local` | `sessionId: string`, `spec: ForwardSpec` | `ForwardInfo` |
+| `forward_open_dynamic` | `sessionId: string`, `bindAddress: string`, `localPort: number` | `ForwardInfo` |
 | `forward_list` | - | `ForwardInfo[]` |
 | `forward_close` | `id: string` | `void` |
 
@@ -534,6 +535,13 @@ forward reaches only what its session can, and closes with it. The bind happens
 inside `forward_open_local`, so a port already in use is an error there, not a
 silent failure later. Changes arrive as `forward:update` events carrying the
 whole forward.
+
+`forward_open_dynamic` is `ssh -D`: a SOCKS5 proxy on the bound port. Each
+connection negotiates SOCKS5 (no auth, CONNECT, IPv4/domain/IPv6) to name its
+own target, which is then opened over the same `direct-tcpip` path - so a whole
+application reaches whatever the session can. Its `ForwardInfo` has
+`kind: "dynamic"` and an empty `host`/`port`, since the target varies per
+connection; a local forward has `kind: "local"`.
 
 ```ts
 type ForwardSpec = {

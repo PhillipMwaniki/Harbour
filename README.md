@@ -252,7 +252,10 @@ its own host key and authenticates with its own credentials, exactly as
 port (or an automatic one), a remote host and a port, carried over the
 connection the terminal already has - no second login. The remote host is
 resolved on the far side, so `localhost` is the server's own. A forward can be
-exposed on the network with an explicit opt-in that is warned about.
+exposed on the network with an explicit opt-in that is warned about. The same
+panel also opens a **dynamic SOCKS5 proxy** (`ssh -D`): point an application's
+SOCKS proxy at the bound port and every connection it makes is tunnelled through
+the session, reaching whatever the session can.
 
 ## Snippets and the shell
 
