@@ -28,28 +28,34 @@ function isPublic(bind: string): boolean {
 export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
   const forwards = useForwards((state) => state.forwards);
   const error = useForwards((state) => state.error);
-  const { openLocal, close, setError } = useForwards.getState();
+  const { openLocal, openDynamic, close, setError } = useForwards.getState();
   const mine = forwardsFor(forwards, sessionId);
 
+  const [mode, setMode] = useState<"local" | "dynamic">("local");
   const [localPort, setLocalPort] = useState("");
   const [host, setHost] = useState("localhost");
   const [port, setPort] = useState("");
   const [bindPublic, setBindPublic] = useState(false);
 
+  const dynamic = mode === "dynamic";
   const valid =
     sessionId !== null &&
     (localPort === "" || PORT.test(localPort)) &&
-    host.trim() !== "" &&
-    PORT.test(port);
+    // A dynamic forward needs no target; a local one does.
+    (dynamic || (host.trim() !== "" && PORT.test(port)));
 
   const add = async () => {
     if (!sessionId || !valid) return;
-    const created = await openLocal(sessionId, {
-      bindAddress: bindPublic ? "0.0.0.0" : "127.0.0.1",
-      localPort: localPort === "" ? 0 : Number(localPort),
-      host: host.trim(),
-      port: Number(port),
-    });
+    const bindAddress = bindPublic ? "0.0.0.0" : "127.0.0.1";
+    const boundPort = localPort === "" ? 0 : Number(localPort);
+    const created = dynamic
+      ? await openDynamic(sessionId, bindAddress, boundPort)
+      : await openLocal(sessionId, {
+          bindAddress,
+          localPort: boundPort,
+          host: host.trim(),
+          port: Number(port),
+        });
     if (created) {
       setLocalPort("");
       setPort("");
@@ -88,31 +94,63 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
             void add();
           }}
         >
-          <div className="mb-2 grid grid-cols-[1fr_auto_2fr_auto_1fr] items-center gap-1">
-            <input
-              aria-label="Local port"
-              value={localPort}
-              placeholder="auto"
-              onChange={(event) => setLocalPort(event.target.value.trim())}
-              className="rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-center font-mono"
-            />
-            <span className="px-0.5 text-[var(--hb-fg-muted)]">&rarr;</span>
-            <input
-              aria-label="Remote host"
-              value={host}
-              placeholder="host"
-              onChange={(event) => setHost(event.target.value)}
-              className="rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 font-mono"
-            />
-            <span className="px-0.5 text-[var(--hb-fg-muted)]">:</span>
-            <input
-              aria-label="Remote port"
-              value={port}
-              placeholder="port"
-              onChange={(event) => setPort(event.target.value.trim())}
-              className="rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-center font-mono"
-            />
+          <div className="mb-2 flex overflow-hidden rounded border border-[var(--hb-border)]">
+            {(["local", "dynamic"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={mode === option}
+                onClick={() => setMode(option)}
+                className={[
+                  "flex-1 px-2 py-1",
+                  mode === option
+                    ? "bg-[var(--hb-accent)] text-[var(--hb-bg)]"
+                    : "hover:bg-[var(--hb-hover)]",
+                ].join(" ")}
+              >
+                {option === "local" ? "Local (-L)" : "Dynamic SOCKS (-D)"}
+              </button>
+            ))}
           </div>
+
+          {dynamic ? (
+            <div className="mb-2 flex items-center gap-1">
+              <input
+                aria-label="Local port"
+                value={localPort}
+                placeholder="auto"
+                onChange={(event) => setLocalPort(event.target.value.trim())}
+                className="w-24 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-center font-mono"
+              />
+              <span className="text-[var(--hb-fg-muted)]">SOCKS5 proxy port</span>
+            </div>
+          ) : (
+            <div className="mb-2 grid grid-cols-[1fr_auto_2fr_auto_1fr] items-center gap-1">
+              <input
+                aria-label="Local port"
+                value={localPort}
+                placeholder="auto"
+                onChange={(event) => setLocalPort(event.target.value.trim())}
+                className="rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-center font-mono"
+              />
+              <span className="px-0.5 text-[var(--hb-fg-muted)]">&rarr;</span>
+              <input
+                aria-label="Remote host"
+                value={host}
+                placeholder="host"
+                onChange={(event) => setHost(event.target.value)}
+                className="rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 font-mono"
+              />
+              <span className="px-0.5 text-[var(--hb-fg-muted)]">:</span>
+              <input
+                aria-label="Remote port"
+                value={port}
+                placeholder="port"
+                onChange={(event) => setPort(event.target.value.trim())}
+                className="rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-center font-mono"
+              />
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <label className="flex items-center gap-1 text-[var(--hb-fg-muted)]">
               <input
@@ -136,8 +174,9 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
             </p>
           )}
           <p className="mt-1 text-[var(--hb-fg-muted)]">
-            The remote host is resolved on the far side, so <code>localhost</code> is the server's
-            own.
+            {dynamic
+              ? "Point an application's SOCKS5 proxy at this port; every connection it makes is tunnelled through the session."
+              : "The remote host is resolved on the far side, so localhost is the server's own."}
           </p>
         </form>
       )}
@@ -169,12 +208,13 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
 function ForwardRow({ forward, onClose }: { forward: ForwardInfo; onClose: () => void }) {
   const address = `${forward.bindAddress}:${forward.localPort}`;
   const url = `http://127.0.0.1:${forward.localPort}`;
+  const dynamic = forward.kind === "dynamic";
   return (
     <div className="flex items-center gap-2 border-t border-[var(--hb-border)] px-2 py-1">
       <div className="min-w-0 flex-1">
         <div className="truncate font-mono">
-          {address} <span className="text-[var(--hb-fg-muted)]">&rarr;</span> {forward.host}:
-          {forward.port}
+          {address} <span className="text-[var(--hb-fg-muted)]">&rarr;</span>{" "}
+          {dynamic ? <span className="text-[var(--hb-fg-muted)]">SOCKS proxy</span> : `${forward.host}:${forward.port}`}
         </div>
         <div className="text-[var(--hb-fg-muted)]">
           {isPublic(forward.bindAddress) && (
@@ -186,15 +226,17 @@ function ForwardRow({ forward, onClose }: { forward: ForwardInfo; onClose: () =>
           {forward.error && <span style={{ color: "var(--hb-danger)" }}> · {forward.error}</span>}
         </div>
       </div>
-      <button
-        type="button"
-        title="Open in browser"
-        aria-label={`Open ${url}`}
-        className="rounded px-1.5 py-0.5 hover:bg-[var(--hb-hover)]"
-        onClick={() => void openUrl(url).catch(() => {})}
-      >
-        &#8599;
-      </button>
+      {!dynamic && (
+        <button
+          type="button"
+          title="Open in browser"
+          aria-label={`Open ${url}`}
+          className="rounded px-1.5 py-0.5 hover:bg-[var(--hb-hover)]"
+          onClick={() => void openUrl(url).catch(() => {})}
+        >
+          &#8599;
+        </button>
+      )}
       <button
         type="button"
         aria-label={`Close forward ${address}`}

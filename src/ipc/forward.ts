@@ -13,12 +13,17 @@ export interface ForwardSpec {
 
 export type ForwardState = "listening" | "closed" | "failed";
 
+/** `local` carries one fixed target; `dynamic` is a SOCKS5 proxy. */
+export type ForwardKind = "local" | "dynamic";
+
 export interface ForwardInfo {
   id: string;
   sessionId: string;
+  kind: ForwardKind;
   bindAddress: string;
   /** The port actually bound; differs from the request when it asked for 0. */
   localPort: number;
+  /** The fixed target of a local forward; empty for a dynamic one. */
   host: string;
   port: number;
   state: ForwardState;
@@ -29,6 +34,15 @@ export interface ForwardInfo {
 /** Opens a local port forward on a session's connection. */
 export function forwardOpenLocal(sessionId: string, spec: ForwardSpec): Promise<ForwardInfo> {
   return invoke<ForwardInfo>("forward_open_local", { sessionId, spec });
+}
+
+/** Opens a dynamic (SOCKS5) forward on a session's connection - `ssh -D`. */
+export function forwardOpenDynamic(
+  sessionId: string,
+  bindAddress: string,
+  localPort: number,
+): Promise<ForwardInfo> {
+  return invoke<ForwardInfo>("forward_open_dynamic", { sessionId, bindAddress, localPort });
 }
 
 export function forwardList(): Promise<ForwardInfo[]> {

@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use crate::error::{AppError, AppResult};
@@ -21,6 +22,15 @@ use crate::session::SessionId;
 use crate::ssh::transport::ChannelOpener;
 
 pub type ForwardId = String;
+
+// The slice of SOCKS5 (RFC 1928) a dynamic forward needs: no authentication,
+// the CONNECT command, and IPv4 / domain / IPv6 addresses.
+const SOCKS_VERSION: u8 = 5;
+const SOCKS_CONNECT: u8 = 1;
+const SOCKS_SUCCEEDED: u8 = 0x00;
+const SOCKS_REFUSED: u8 = 0x05;
+const SOCKS_CMD_UNSUPPORTED: u8 = 0x07;
+const SOCKS_ATYP_UNSUPPORTED: u8 = 0x08;
 
 /// What to forward: listen here, deliver there.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -45,16 +55,36 @@ pub enum ForwardState {
     Failed,
 }
 
+/// Which kind of forward this is. A local forward carries one fixed target; a
+/// dynamic one is a SOCKS5 proxy whose target each connection chooses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForwardKind {
+    Local,
+    Dynamic,
+}
+
+/// How the accept loop finds each connection's target.
+enum Target {
+    /// A local forward: every connection goes to the same host and port.
+    Fixed(String, u16),
+    /// A dynamic forward: each connection asks, over SOCKS5, where to go.
+    Socks,
+}
+
 /// A forward as the frontend sees it, sent whole on every change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForwardInfo {
     pub id: ForwardId,
     pub session_id: SessionId,
+    pub kind: ForwardKind,
     pub bind_address: String,
     /// The port actually bound, which differs from the request when it asked
     /// for `0`.
     pub local_port: u16,
+    /// The fixed target of a local forward. Empty for a dynamic forward, whose
+    /// target varies per connection.
     pub host: String,
     pub port: u16,
     pub state: ForwardState,
@@ -107,6 +137,7 @@ impl Forwards {
         let info = ForwardInfo {
             id: id.clone(),
             session_id,
+            kind: ForwardKind::Local,
             bind_address: spec.bind_address.clone(),
             local_port,
             host: spec.host.clone(),
@@ -119,10 +150,67 @@ impl Forwards {
         let engine = Arc::clone(self);
         let accept_id = id.clone();
         let accept_conns = Arc::clone(&connections);
-        let target = (spec.host.clone(), spec.port);
+        let target = Target::Fixed(spec.host.clone(), spec.port);
         let task = tauri::async_runtime::spawn(async move {
             engine
                 .accept_loop(accept_id, listener, opener, target, accept_conns)
+                .await;
+        });
+
+        self.inner.lock().insert(
+            id,
+            Forward {
+                info: info.clone(),
+                task,
+            },
+        );
+        (self.emit)(&info);
+        Ok(info)
+    }
+
+    /// Binds a SOCKS5 proxy that tunnels each connection through the session.
+    ///
+    /// This is `ssh -D`: applications point their SOCKS proxy at this port and
+    /// every connection they make is opened on the remote side, so the whole
+    /// application reaches whatever the session can. The target is not fixed -
+    /// each connection names its own over SOCKS5 - so no host or port is given.
+    pub async fn open_dynamic(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        opener: ChannelOpener,
+        bind_address: String,
+        local_port: u16,
+    ) -> AppResult<ForwardInfo> {
+        let bind = format!("{bind_address}:{local_port}");
+        let listener = TcpListener::bind(&bind)
+            .await
+            .map_err(|err| AppError::Forward(format!("could not listen on {bind}: {err}")))?;
+        let bound_port = listener
+            .local_addr()
+            .map(|addr| addr.port())
+            .unwrap_or(local_port);
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let connections = Arc::new(AtomicU32::new(0));
+        let info = ForwardInfo {
+            id: id.clone(),
+            session_id,
+            kind: ForwardKind::Dynamic,
+            bind_address: bind_address.clone(),
+            local_port: bound_port,
+            host: String::new(),
+            port: 0,
+            state: ForwardState::Listening,
+            connections: 0,
+            error: None,
+        };
+
+        let engine = Arc::clone(self);
+        let accept_id = id.clone();
+        let accept_conns = Arc::clone(&connections);
+        let task = tauri::async_runtime::spawn(async move {
+            engine
+                .accept_loop(accept_id, listener, opener, Target::Socks, accept_conns)
                 .await;
         });
 
@@ -142,9 +230,10 @@ impl Forwards {
         id: ForwardId,
         listener: TcpListener,
         opener: ChannelOpener,
-        target: (String, u16),
+        target: Target,
         connections: Arc<AtomicU32>,
     ) {
+        let socks = matches!(target, Target::Socks);
         loop {
             let (mut socket, _peer) = match listener.accept().await {
                 Ok(accepted) => accepted,
@@ -159,18 +248,40 @@ impl Forwards {
             self.update(&id, |info| info.connections = count);
 
             let opener = opener.clone();
-            let (host, port) = target.clone();
+            let fixed = match &target {
+                Target::Fixed(host, port) => Some((host.clone(), *port)),
+                Target::Socks => None,
+            };
             let forward_id = id.clone();
             let engine = Arc::clone(&self);
             tauri::async_runtime::spawn(async move {
+                // A dynamic forward learns the target from the SOCKS handshake;
+                // a local one already knows it.
+                let (host, port) = match fixed {
+                    Some(target) => target,
+                    None => match socks5_accept(&mut socket).await {
+                        Ok(target) => target,
+                        Err(err) => {
+                            tracing::debug!(forward = %forward_id, error = %err, "socks handshake failed");
+                            return;
+                        }
+                    },
+                };
+
                 match opener.open_forward(&host, port).await {
                     Ok(channel) => {
+                        if socks {
+                            let _ = socks5_reply(&mut socket, SOCKS_SUCCEEDED).await;
+                        }
                         let mut stream = channel.into_stream();
                         // Ends when either side closes; a forwarded connection
                         // closing is normal and says nothing about the forward.
                         let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
                     }
                     Err(err) => {
+                        if socks {
+                            let _ = socks5_reply(&mut socket, SOCKS_REFUSED).await;
+                        }
                         // The connection could not be opened - the remote
                         // refused, or the session went away. The forward stays
                         // up; this one connection failed.
@@ -230,6 +341,79 @@ impl Forwards {
             let _ = self.close(&id);
         }
     }
+}
+
+/// The SOCKS5 opening: negotiate "no authentication", read the CONNECT
+/// request, and return the target the client asked for. The success reply is
+/// the caller's to send, once the channel to the target is open (or a refusal
+/// if it is not).
+async fn socks5_accept<S>(socket: &mut S) -> AppResult<(String, u16)>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    let io = |err: std::io::Error| AppError::Forward(format!("socks: {err}"));
+    let refuse = || AppError::Forward("socks: refused".into());
+
+    // Greeting: version, method count, then the methods themselves.
+    let mut greeting = [0u8; 2];
+    socket.read_exact(&mut greeting).await.map_err(io)?;
+    if greeting[0] != SOCKS_VERSION {
+        return Err(AppError::Forward("socks: not a SOCKS5 client".into()));
+    }
+    let mut methods = vec![0u8; greeting[1] as usize];
+    socket.read_exact(&mut methods).await.map_err(io)?;
+    // Only "no authentication" is offered; the tunnel is the security boundary.
+    socket.write_all(&[SOCKS_VERSION, 0x00]).await.map_err(io)?;
+
+    // Request: version, command, reserved, address type.
+    let mut request = [0u8; 4];
+    socket.read_exact(&mut request).await.map_err(io)?;
+    if request[0] != SOCKS_VERSION {
+        return Err(refuse());
+    }
+    if request[1] != SOCKS_CONNECT {
+        let _ = socks5_reply(socket, SOCKS_CMD_UNSUPPORTED).await;
+        return Err(AppError::Forward("socks: only CONNECT is supported".into()));
+    }
+
+    let host = match request[3] {
+        0x01 => {
+            let mut addr = [0u8; 4];
+            socket.read_exact(&mut addr).await.map_err(io)?;
+            std::net::Ipv4Addr::from(addr).to_string()
+        }
+        0x03 => {
+            let mut len = [0u8; 1];
+            socket.read_exact(&mut len).await.map_err(io)?;
+            let mut name = vec![0u8; len[0] as usize];
+            socket.read_exact(&mut name).await.map_err(io)?;
+            String::from_utf8_lossy(&name).into_owned()
+        }
+        0x04 => {
+            let mut addr = [0u8; 16];
+            socket.read_exact(&mut addr).await.map_err(io)?;
+            std::net::Ipv6Addr::from(addr).to_string()
+        }
+        _ => {
+            let _ = socks5_reply(socket, SOCKS_ATYP_UNSUPPORTED).await;
+            return Err(AppError::Forward("socks: unsupported address type".into()));
+        }
+    };
+
+    let mut port = [0u8; 2];
+    socket.read_exact(&mut port).await.map_err(io)?;
+    Ok((host, u16::from_be_bytes(port)))
+}
+
+/// The SOCKS5 reply. The bound address is reported as `0.0.0.0:0`: the client
+/// does not need it, and the real bind is the remote's, which we do not know.
+async fn socks5_reply<S>(socket: &mut S, rep: u8) -> std::io::Result<()>
+where
+    S: AsyncWriteExt + Unpin,
+{
+    socket
+        .write_all(&[SOCKS_VERSION, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+        .await
 }
 
 /// Parses `[bind:]localPort:host:port`, as `ssh -L` takes it, so a forward can
@@ -347,5 +531,70 @@ mod tests {
         assert!(!is_public_bind("localhost"));
         assert!(is_public_bind("0.0.0.0"));
         assert!(is_public_bind("192.168.1.10"));
+    }
+
+    /// The SOCKS5 opening a browser or curl would send, and what the proxy
+    /// reads back out of it.
+    #[tokio::test]
+    async fn socks5_reads_a_domain_connect_request() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        // Greeting: v5, one method, "no authentication".
+        client.write_all(&[5, 1, 0]).await.unwrap();
+        // CONNECT example.com:443, as a domain address.
+        let host = b"example.com";
+        let mut request = vec![5, 1, 0, 3, host.len() as u8];
+        request.extend_from_slice(host);
+        request.extend_from_slice(&443u16.to_be_bytes());
+        client.write_all(&request).await.unwrap();
+
+        let (target_host, target_port) = socks5_accept(&mut server).await.unwrap();
+        assert_eq!(target_host, "example.com");
+        assert_eq!(target_port, 443);
+
+        // The proxy chose the no-auth method.
+        let mut selection = [0u8; 2];
+        client.read_exact(&mut selection).await.unwrap();
+        assert_eq!(selection, [5, 0]);
+    }
+
+    #[tokio::test]
+    async fn socks5_parses_ipv4_and_ipv6_targets() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        client.write_all(&[5, 1, 0]).await.unwrap();
+        let mut request = vec![5, 1, 0, 1, 10, 0, 0, 9];
+        request.extend_from_slice(&5432u16.to_be_bytes());
+        client.write_all(&request).await.unwrap();
+        let (host, port) = socks5_accept(&mut server).await.unwrap();
+        assert_eq!(host, "10.0.0.9");
+        assert_eq!(port, 5432);
+
+        let (mut client6, mut server6) = tokio::io::duplex(1024);
+        client6.write_all(&[5, 1, 0]).await.unwrap();
+        let mut request6 = vec![5, 1, 0, 4];
+        request6.extend_from_slice(&std::net::Ipv6Addr::LOCALHOST.octets());
+        request6.extend_from_slice(&22u16.to_be_bytes());
+        client6.write_all(&request6).await.unwrap();
+        let (host6, port6) = socks5_accept(&mut server6).await.unwrap();
+        assert_eq!(host6, "::1");
+        assert_eq!(port6, 22);
+    }
+
+    #[tokio::test]
+    async fn socks5_refuses_anything_but_connect() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        client.write_all(&[5, 1, 0]).await.unwrap();
+        // Command 2 is BIND, which we do not support.
+        let mut request = vec![5, 2, 0, 1, 127, 0, 0, 1];
+        request.extend_from_slice(&80u16.to_be_bytes());
+        client.write_all(&request).await.unwrap();
+        assert!(socks5_accept(&mut server).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn socks5_rejects_a_non_socks_client() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        // A plain HTTP request, not SOCKS.
+        client.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+        assert!(socks5_accept(&mut server).await.is_err());
     }
 }

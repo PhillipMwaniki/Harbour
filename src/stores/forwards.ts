@@ -3,6 +3,7 @@ import { create } from "zustand";
 import {
   forwardClose,
   forwardList,
+  forwardOpenDynamic,
   forwardOpenLocal,
   type ForwardInfo,
   type ForwardSpec,
@@ -22,6 +23,11 @@ export interface ForwardsState {
   apply: (forward: ForwardInfo) => void;
   load: () => Promise<void>;
   openLocal: (sessionId: string, spec: ForwardSpec) => Promise<ForwardInfo | null>;
+  openDynamic: (
+    sessionId: string,
+    bindAddress: string,
+    localPort: number,
+  ) => Promise<ForwardInfo | null>;
   close: (id: string) => Promise<void>;
   /** Drops every forward for a session, once it is gone. */
   forget: (sessionId: string) => void;
@@ -63,6 +69,17 @@ export const useForwards = create<ForwardsState>((set) => ({
       return forward;
     } catch (err) {
       // A port already in use is the common failure; the panel shows it.
+      set({ error: errorMessage(err), open: true });
+      return null;
+    }
+  },
+
+  openDynamic: async (sessionId, bindAddress, localPort) => {
+    try {
+      const forward = await forwardOpenDynamic(sessionId, bindAddress, localPort);
+      set((state) => ({ forwards: upsert(state.forwards, forward), error: null, open: true }));
+      return forward;
+    } catch (err) {
       set({ error: errorMessage(err), open: true });
       return null;
     }

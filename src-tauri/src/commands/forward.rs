@@ -25,6 +25,22 @@ pub async fn forward_open_local(
     state.forwards.open_local(session_id, opener, spec).await
 }
 
+/// Opens a dynamic (SOCKS5) forward on `session_id`'s connection - `ssh -D`.
+/// Applications point their SOCKS proxy at the bound port.
+#[tauri::command]
+pub async fn forward_open_dynamic(
+    state: State<'_, AppState>,
+    session_id: String,
+    bind_address: String,
+    local_port: u16,
+) -> AppResult<ForwardInfo> {
+    let opener = state.connections.opener(&session_id)?;
+    state
+        .forwards
+        .open_dynamic(session_id, opener, bind_address, local_port)
+        .await
+}
+
 #[tauri::command]
 pub async fn forward_list(state: State<'_, AppState>) -> AppResult<Vec<ForwardInfo>> {
     Ok(state.forwards.list())
