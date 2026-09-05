@@ -5,6 +5,57 @@ All notable changes to Harbour are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-05
+
+Beyond the MVP: new session kinds, automation across an estate, and features
+that make Harbour stand out from other clients - with an end-to-end test suite
+driving the real app.
+
+### Added
+
+- **Fleet runner.** Run one command across many saved hosts at once, non-
+  interactively, with results streaming in per host and colour-coded by exit
+  status. Jump chains are followed as they are for an interactive connection.
+- **Broadcast input.** A toolbar toggle mirrors what you type to every pane in
+  the tab, so one interactive command runs on many hosts; broadcasting panes get
+  an unmistakable red frame and badge.
+- **Serial and telnet sessions.** Two new session kinds alongside SSH: a telnet
+  client (with the option negotiation handled in the core) and a serial console
+  onto a local port, both chosen from the connect dialog's protocol switch.
+- **Output triggers.** Watch a session's output for a pattern and act on it - a
+  desktop notification, the bell, or send text back - matched a line at a time
+  as the output streams.
+- **Command guardrails.** Mark a host *guarded* and Harbour confirms destructive
+  commands (rm -rf, mkfs, dd, shutdown, force-push, DROP TABLE and more,
+  editable in Settings) before they run on it - enforced at the fleet runner,
+  where a batch mistake is most costly.
+- **Key generation and deployment.** *Set up key authentication…* in the host
+  editor generates an Ed25519 keypair and installs its public half in the host's
+  `authorized_keys`, connecting with the password once - `ssh-keygen` +
+  `ssh-copy-id`, as a button. The private key never leaves the machine.
+- **Dynamic SOCKS forwarding (`ssh -D`).** A SOCKS5 proxy on a local port; each
+  connection names its own target and is tunnelled through the session, so a
+  whole application reaches whatever the session can. Alongside the existing
+  local (`ssh -L`) forwards.
+- **Folder-based vault sync.** Push an encrypted copy of the vault to a synced
+  folder (Dropbox, OneDrive, iCloud) and pull it back on another machine, from
+  Settings › Sync.
+- **SFTP permissions and properties.** Right-click › Properties shows a file's
+  path, size, timestamp and owner, and on the remote side edits its permission
+  bits with a chmod grid.
+- **A native file picker** for the private key, in the connect dialog and host
+  editor.
+- **`ProxyJump` at import.** A host's `ProxyJump` from `~/.ssh/config` is wired
+  to the imported bastion, so it arrives ready to tunnel.
+- **End-to-end tests.** A WebdriverIO + tauri-driver suite drives the built app,
+  run on Linux in CI on every pull request.
+
+### Notes
+
+- Guarding *typed* input as it is entered, "use an existing key" in the key
+  setup flow, and remote (`-R`) forwarding are planned follow-ups; the reliable,
+  highest-value paths ship here.
+
 ## [0.3.0] - 2026-09-04
 
 The MVP: everything Harbour keeps can now be protected at rest and carried
