@@ -15,6 +15,7 @@ pub mod client;
 pub mod forward;
 pub mod keygen;
 pub mod known_hosts;
+pub mod remote;
 pub mod sftp;
 pub mod transport;
 

@@ -438,6 +438,7 @@ pub async fn host_connect(
     );
 
     let opener = connected.transport.opener();
+    let remote_forwards = connected.remote_forwards;
     let info = state.sessions.adopt(NewSession {
         id,
         kind: SessionKind::Ssh,
@@ -445,7 +446,9 @@ pub async fn host_connect(
         transport: Box::new(connected.transport),
         output: connected.output,
     });
-    state.connections.register(info.session_id.clone(), opener);
+    state
+        .connections
+        .register(info.session_id.clone(), opener, remote_forwards);
 
     let _ = app.emit("session:opened", &info);
     Ok(info)

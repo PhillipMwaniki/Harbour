@@ -5,6 +5,14 @@ All notable changes to Harbour are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Remote port forwarding (`ssh -R`).** The third forward direction: the
+  server listens on a port and each connection it accepts is delivered to a
+  target this machine can reach, over the session's existing connection. Choose
+  Remote (-R) in the port-forward panel. Completes the forwarding trilogy
+  alongside local (-L) and dynamic SOCKS (-D).
+
 ## [0.4.0] - 2026-09-05
 
 Beyond the MVP: new session kinds, automation across an estate, and features

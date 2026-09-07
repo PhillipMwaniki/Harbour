@@ -19,45 +19,66 @@ function isPublic(bind: string): boolean {
   return trimmed !== "" && trimmed !== "127.0.0.1" && trimmed !== "localhost" && trimmed !== "::1";
 }
 
+type Mode = "local" | "dynamic" | "remote";
+
+const MODE_LABEL: Record<Mode, string> = {
+  local: "Local (-L)",
+  dynamic: "SOCKS (-D)",
+  remote: "Remote (-R)",
+};
+
 /**
- * Local port forwards for the focused SSH session: `ssh -L`, in a form. Each
- * one listens on this machine and delivers to a host the remote can reach,
- * over the connection the terminal already has - so there is no new login and
- * a forward can only reach what its session can.
+ * Port forwards for the focused SSH session, in a form. A local forward
+ * (`ssh -L`) listens on this machine and delivers to a host the remote can
+ * reach; a dynamic one (`ssh -D`) is a SOCKS5 proxy; a remote one (`ssh -R`)
+ * runs the other way, the server listening and this machine reaching the
+ * target. All ride the connection the terminal already has - no new login,
+ * and a forward can only reach what its session can.
  */
 export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
   const forwards = useForwards((state) => state.forwards);
   const error = useForwards((state) => state.error);
-  const { openLocal, openDynamic, close, setError } = useForwards.getState();
+  const { openLocal, openDynamic, openRemote, close, setError } = useForwards.getState();
   const mine = forwardsFor(forwards, sessionId);
 
-  const [mode, setMode] = useState<"local" | "dynamic">("local");
-  const [localPort, setLocalPort] = useState("");
+  const [mode, setMode] = useState<Mode>("local");
+  const [listenPort, setListenPort] = useState("");
   const [host, setHost] = useState("localhost");
   const [port, setPort] = useState("");
   const [bindPublic, setBindPublic] = useState(false);
 
   const dynamic = mode === "dynamic";
+  const remote = mode === "remote";
   const valid =
     sessionId !== null &&
-    (localPort === "" || PORT.test(localPort)) &&
-    // A dynamic forward needs no target; a local one does.
+    (listenPort === "" || PORT.test(listenPort)) &&
+    // A dynamic forward needs no target; local and remote both do.
     (dynamic || (host.trim() !== "" && PORT.test(port)));
 
   const add = async () => {
     if (!sessionId || !valid) return;
     const bindAddress = bindPublic ? "0.0.0.0" : "127.0.0.1";
-    const boundPort = localPort === "" ? 0 : Number(localPort);
-    const created = dynamic
-      ? await openDynamic(sessionId, bindAddress, boundPort)
-      : await openLocal(sessionId, {
-          bindAddress,
-          localPort: boundPort,
-          host: host.trim(),
-          port: Number(port),
-        });
+    const boundPort = listenPort === "" ? 0 : Number(listenPort);
+    let created: ForwardInfo | null;
+    if (dynamic) {
+      created = await openDynamic(sessionId, bindAddress, boundPort);
+    } else if (remote) {
+      created = await openRemote(sessionId, {
+        bindAddress,
+        remotePort: boundPort,
+        host: host.trim(),
+        port: Number(port),
+      });
+    } else {
+      created = await openLocal(sessionId, {
+        bindAddress,
+        localPort: boundPort,
+        host: host.trim(),
+        port: Number(port),
+      });
+    }
     if (created) {
-      setLocalPort("");
+      setListenPort("");
       setPort("");
     }
   };
@@ -95,7 +116,7 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
           }}
         >
           <div className="mb-2 flex overflow-hidden rounded border border-[var(--hb-border)]">
-            {(["local", "dynamic"] as const).map((option) => (
+            {(["local", "dynamic", "remote"] as const).map((option) => (
               <button
                 key={option}
                 type="button"
@@ -108,7 +129,7 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
                     : "hover:bg-[var(--hb-hover)]",
                 ].join(" ")}
               >
-                {option === "local" ? "Local (-L)" : "Dynamic SOCKS (-D)"}
+                {MODE_LABEL[option]}
               </button>
             ))}
           </div>
@@ -117,9 +138,9 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
             <div className="mb-2 flex items-center gap-1">
               <input
                 aria-label="Local port"
-                value={localPort}
+                value={listenPort}
                 placeholder="auto"
-                onChange={(event) => setLocalPort(event.target.value.trim())}
+                onChange={(event) => setListenPort(event.target.value.trim())}
                 className="w-24 rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-center font-mono"
               />
               <span className="text-[var(--hb-fg-muted)]">SOCKS5 proxy port</span>
@@ -127,15 +148,15 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
           ) : (
             <div className="mb-2 grid grid-cols-[1fr_auto_2fr_auto_1fr] items-center gap-1">
               <input
-                aria-label="Local port"
-                value={localPort}
+                aria-label={remote ? "Remote listen port" : "Local port"}
+                value={listenPort}
                 placeholder="auto"
-                onChange={(event) => setLocalPort(event.target.value.trim())}
+                onChange={(event) => setListenPort(event.target.value.trim())}
                 className="rounded border border-[var(--hb-border)] bg-[var(--hb-bg)] px-2 py-1 text-center font-mono"
               />
               <span className="px-0.5 text-[var(--hb-fg-muted)]">&rarr;</span>
               <input
-                aria-label="Remote host"
+                aria-label={remote ? "Local host" : "Remote host"}
                 value={host}
                 placeholder="host"
                 onChange={(event) => setHost(event.target.value)}
@@ -143,7 +164,7 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
               />
               <span className="px-0.5 text-[var(--hb-fg-muted)]">:</span>
               <input
-                aria-label="Remote port"
+                aria-label={remote ? "Local port" : "Remote port"}
                 value={port}
                 placeholder="port"
                 onChange={(event) => setPort(event.target.value.trim())}
@@ -158,7 +179,7 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
                 checked={bindPublic}
                 onChange={(event) => setBindPublic(event.target.checked)}
               />
-              Expose on the network
+              {remote ? "Expose on the server's network" : "Expose on the network"}
             </label>
             <button
               type="submit"
@@ -170,13 +191,17 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
           </div>
           {bindPublic && (
             <p className="mt-1 text-[var(--hb-danger)]">
-              A forward on 0.0.0.0 is reachable by anything that can reach this machine.
+              {remote
+                ? "A remote forward on 0.0.0.0 exposes it to the server's network, if the server's GatewayPorts allows it at all."
+                : "A forward on 0.0.0.0 is reachable by anything that can reach this machine."}
             </p>
           )}
           <p className="mt-1 text-[var(--hb-fg-muted)]">
             {dynamic
               ? "Point an application's SOCKS5 proxy at this port; every connection it makes is tunnelled through the session."
-              : "The remote host is resolved on the far side, so localhost is the server's own."}
+              : remote
+                ? "The server listens; each connection it accepts is delivered to this machine's target, so localhost is your own."
+                : "The remote host is resolved on the far side, so localhost is the server's own."}
           </p>
         </form>
       )}
@@ -205,14 +230,22 @@ export function ForwardPanel({ sessionId, sessionTitle, onClose }: Props) {
   );
 }
 
+const KIND_TAG: Record<ForwardInfo["kind"], string> = {
+  local: "-L",
+  dynamic: "-D",
+  remote: "-R",
+};
+
 function ForwardRow({ forward, onClose }: { forward: ForwardInfo; onClose: () => void }) {
   const address = `${forward.bindAddress}:${forward.localPort}`;
   const url = `http://127.0.0.1:${forward.localPort}`;
   const dynamic = forward.kind === "dynamic";
+  const remote = forward.kind === "remote";
   return (
     <div className="flex items-center gap-2 border-t border-[var(--hb-border)] px-2 py-1">
       <div className="min-w-0 flex-1">
         <div className="truncate font-mono">
+          <span className="mr-1 text-[var(--hb-fg-muted)]">{KIND_TAG[forward.kind]}</span>
           {address} <span className="text-[var(--hb-fg-muted)]">&rarr;</span>{" "}
           {dynamic ? <span className="text-[var(--hb-fg-muted)]">SOCKS proxy</span> : `${forward.host}:${forward.port}`}
         </div>
@@ -220,13 +253,14 @@ function ForwardRow({ forward, onClose }: { forward: ForwardInfo; onClose: () =>
           {isPublic(forward.bindAddress) && (
             <span style={{ color: "var(--hb-danger)" }}>exposed · </span>
           )}
+          {remote && <span>server-side · </span>}
           {forward.connections === 0
             ? "listening"
             : `${forward.connections} connection${forward.connections === 1 ? "" : "s"}`}
           {forward.error && <span style={{ color: "var(--hb-danger)" }}> · {forward.error}</span>}
         </div>
       </div>
-      {!dynamic && (
+      {forward.kind === "local" && (
         <button
           type="button"
           title="Open in browser"

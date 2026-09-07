@@ -23,6 +23,7 @@ use crate::error::{AppError, AppResult};
 use crate::files::{posix_join, posix_parent, Entry, EntryKind, Listing};
 use crate::session::SessionId;
 use crate::ssh::client::wait_for_reply;
+use crate::ssh::remote::RemoteForwards;
 use crate::ssh::transport::ChannelOpener;
 
 fn sftp_error(err: impl std::fmt::Display) -> AppError {
@@ -174,6 +175,9 @@ pub async fn remove(sftp: &SftpSession, path: &str, recursive: bool) -> AppResul
 
 struct Connection {
     opener: ChannelOpener,
+    /// The routing table for this connection's remote (`-R`) forwards, shared
+    /// with the connection handler that places incoming channels.
+    remote_forwards: Arc<RemoteForwards>,
     /// Opened on first use and kept for the life of the session: a listing
     /// is a round trip on an existing channel, not a new channel each time.
     sftp: Option<Arc<SftpSession>>,
@@ -195,10 +199,20 @@ impl Connections {
         Arc::new(Self::default())
     }
 
-    pub fn register(&self, session_id: SessionId, opener: ChannelOpener) {
-        self.inner
-            .lock()
-            .insert(session_id, Connection { opener, sftp: None });
+    pub fn register(
+        &self,
+        session_id: SessionId,
+        opener: ChannelOpener,
+        remote_forwards: Arc<RemoteForwards>,
+    ) {
+        self.inner.lock().insert(
+            session_id,
+            Connection {
+                opener,
+                remote_forwards,
+                sftp: None,
+            },
+        );
     }
 
     /// Forgets a session. The SFTP channel, if one was open, dies with the
@@ -218,6 +232,21 @@ impl Connections {
             .lock()
             .get(session_id)
             .map(|connection| connection.opener.clone())
+            .ok_or_else(|| {
+                AppError::Forward(format!(
+                    "session {session_id} is not an SSH session, or has already closed"
+                ))
+            })
+    }
+
+    /// The routing table a remote (`-R`) forward registers its target in, so
+    /// the connection handler can deliver channels the server pushes back.
+    /// `Err` for a session with no remote side.
+    pub fn remote_forwards(&self, session_id: &str) -> AppResult<Arc<RemoteForwards>> {
+        self.inner
+            .lock()
+            .get(session_id)
+            .map(|connection| Arc::clone(&connection.remote_forwards))
             .ok_or_else(|| {
                 AppError::Forward(format!(
                     "session {session_id} is not an SSH session, or has already closed"

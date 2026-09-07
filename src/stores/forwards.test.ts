@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForwardInfo } from "@/ipc/forward";
 
 const forwardOpenLocal = vi.fn();
+const forwardOpenRemote = vi.fn();
 const forwardList = vi.fn();
 const forwardClose = vi.fn();
 
 vi.mock("@/ipc/forward", () => ({
   forwardOpenLocal: (...args: unknown[]) => forwardOpenLocal(...args),
+  forwardOpenRemote: (...args: unknown[]) => forwardOpenRemote(...args),
   forwardList: () => forwardList(),
   forwardClose: (id: string) => forwardClose(id),
 }));
@@ -61,6 +63,48 @@ describe("forwards store", () => {
 
     expect(opened?.localPort).toBe(54321);
     expect(state().forwards).toHaveLength(1);
+    expect(state().open).toBe(true);
+  });
+
+  it("opens a remote forward and reports the server's port", async () => {
+    forwardOpenRemote.mockResolvedValue(
+      forward("r", { kind: "remote", localPort: 9000, host: "localhost", port: 3000 }),
+    );
+
+    const opened = await state().openRemote("s1", {
+      bindAddress: "127.0.0.1",
+      remotePort: 9000,
+      host: "localhost",
+      port: 3000,
+    });
+
+    expect(forwardOpenRemote).toHaveBeenCalledWith("s1", {
+      bindAddress: "127.0.0.1",
+      remotePort: 9000,
+      host: "localhost",
+      port: 3000,
+    });
+    expect(opened?.kind).toBe("remote");
+    expect(opened?.localPort).toBe(9000);
+    expect(state().forwards).toHaveLength(1);
+    expect(state().open).toBe(true);
+  });
+
+  it("records a remote-forward refusal rather than throwing", async () => {
+    forwardOpenRemote.mockRejectedValue({
+      code: "FORWARD_ERROR",
+      message: "the server refused the remote forward",
+    });
+
+    const opened = await state().openRemote("s1", {
+      bindAddress: "127.0.0.1",
+      remotePort: 80,
+      host: "localhost",
+      port: 3000,
+    });
+
+    expect(opened).toBeNull();
+    expect(state().error).toContain("refused");
     expect(state().open).toBe(true);
   });
 

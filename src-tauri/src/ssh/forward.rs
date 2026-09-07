@@ -19,6 +19,7 @@ use tokio::net::TcpListener;
 
 use crate::error::{AppError, AppResult};
 use crate::session::SessionId;
+use crate::ssh::remote::RemoteForwards;
 use crate::ssh::transport::ChannelOpener;
 
 pub type ForwardId = String;
@@ -47,6 +48,23 @@ pub struct ForwardSpec {
     pub port: u16,
 }
 
+/// What to forward in reverse: the server listens here, this machine delivers
+/// there. The mirror of [`ForwardSpec`] - `ssh -R`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSpec {
+    /// Where the *server* should listen. Empty or `localhost` binds the
+    /// remote's loopback; `0.0.0.0` asks it to listen on every interface, which
+    /// the server's `GatewayPorts` setting may refuse.
+    pub bind_address: String,
+    /// The port on the server. `0` lets the server choose, reported back.
+    pub remote_port: u16,
+    /// The target, reached from *this* machine - so `localhost` here means the
+    /// machine Harbour runs on, the mirror of a local forward's target.
+    pub host: String,
+    pub port: u16,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ForwardState {
@@ -56,12 +74,15 @@ pub enum ForwardState {
 }
 
 /// Which kind of forward this is. A local forward carries one fixed target; a
-/// dynamic one is a SOCKS5 proxy whose target each connection chooses.
+/// dynamic one is a SOCKS5 proxy whose target each connection chooses; a remote
+/// forward runs the other way, the server listening and this machine reaching
+/// the target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ForwardKind {
     Local,
     Dynamic,
+    Remote,
 }
 
 /// How the accept loop finds each connection's target.
@@ -81,10 +102,12 @@ pub struct ForwardInfo {
     pub kind: ForwardKind,
     pub bind_address: String,
     /// The port actually bound, which differs from the request when it asked
-    /// for `0`.
+    /// for `0`. For a local or dynamic forward this is the port on *this*
+    /// machine; for a remote forward it is the port the *server* listens on.
     pub local_port: u16,
-    /// The fixed target of a local forward. Empty for a dynamic forward, whose
-    /// target varies per connection.
+    /// The fixed target of a local forward, or the local target a remote
+    /// forward delivers to. Empty for a dynamic forward, whose target varies
+    /// per connection.
     pub host: String,
     pub port: u16,
     pub state: ForwardState,
@@ -97,8 +120,22 @@ pub type Emitter = Arc<dyn Fn(&ForwardInfo) + Send + Sync>;
 
 struct Forward {
     info: ForwardInfo,
-    /// Aborting this stops the accept loop and drops the listener.
-    task: tauri::async_runtime::JoinHandle<()>,
+    teardown: Teardown,
+}
+
+/// How a forward is undone, which differs by direction. A local or dynamic
+/// forward owns a listener on this machine; a remote forward owns a listen on
+/// the server plus a route in the connection's table.
+enum Teardown {
+    /// Aborting the accept loop drops the local listener.
+    Accept(tauri::async_runtime::JoinHandle<()>),
+    /// Forget the route, then ask the server to stop listening.
+    Remote {
+        opener: ChannelOpener,
+        registry: Arc<RemoteForwards>,
+        bind_address: String,
+        remote_port: u16,
+    },
 }
 
 pub struct Forwards {
@@ -161,7 +198,7 @@ impl Forwards {
             id,
             Forward {
                 info: info.clone(),
-                task,
+                teardown: Teardown::Accept(task),
             },
         );
         (self.emit)(&info);
@@ -218,11 +255,116 @@ impl Forwards {
             id,
             Forward {
                 info: info.clone(),
-                task,
+                teardown: Teardown::Accept(task),
             },
         );
         (self.emit)(&info);
         Ok(info)
+    }
+
+    /// Asks the server to listen on a port and forward what arrives there back
+    /// to a target this machine can reach - `ssh -R`.
+    ///
+    /// The request goes out first, so "port already in use on the remote", or a
+    /// server that forbids forwarding, is an error the caller sees rather than a
+    /// forward that silently never fires. The route is placed in the
+    /// connection's table before then, so a connection the server forwards the
+    /// instant it accepts still lands.
+    pub async fn open_remote(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        opener: ChannelOpener,
+        registry: Arc<RemoteForwards>,
+        spec: RemoteSpec,
+    ) -> AppResult<ForwardInfo> {
+        let bind = if spec.bind_address.is_empty() {
+            "localhost".to_string()
+        } else {
+            spec.bind_address.clone()
+        };
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let engine = Arc::clone(self);
+        let route_id = id.clone();
+        // Placed under the requested port; rehomed below if the server chose one
+        // (a port-0 request). Each channel that arrives bumps the card's count.
+        registry.register(
+            u32::from(spec.remote_port),
+            spec.host.clone(),
+            spec.port,
+            Arc::new(move |count| {
+                engine.update(&route_id, |info| info.connections = count);
+            }),
+        );
+
+        // Insert and announce the forward before the request goes out: the
+        // server can push a connection the instant it accepts, and that
+        // connection must find a card to count against. The port is provisional
+        // until the request returns, mattering only for a port-0 request.
+        let mut info = ForwardInfo {
+            id: id.clone(),
+            session_id,
+            kind: ForwardKind::Remote,
+            bind_address: bind.clone(),
+            local_port: spec.remote_port,
+            host: spec.host.clone(),
+            port: spec.port,
+            state: ForwardState::Listening,
+            connections: 0,
+            error: None,
+        };
+        self.inner.lock().insert(
+            id.clone(),
+            Forward {
+                info: info.clone(),
+                teardown: Teardown::Remote {
+                    opener: opener.clone(),
+                    registry: Arc::clone(&registry),
+                    bind_address: bind.clone(),
+                    remote_port: spec.remote_port,
+                },
+            },
+        );
+        (self.emit)(&info);
+
+        let bound = match opener.remote_forward(&bind, spec.remote_port).await {
+            Ok(bound) => bound,
+            Err(err) => {
+                registry.unregister(u32::from(spec.remote_port));
+                self.inner.lock().remove(&id);
+                // Report the failure rather than leaving a card that says
+                // "listening" for a forward the server never set up.
+                info.state = ForwardState::Failed;
+                info.error = Some(err.to_string());
+                (self.emit)(&info);
+                return Err(err);
+            }
+        };
+
+        // A port-0 request: the server named the port it chose, so rehome the
+        // route and correct the card. For any other port `bound` equals the
+        // request and this is a no-op.
+        if bound != spec.remote_port {
+            registry.rekey(u32::from(spec.remote_port), u32::from(bound));
+            let mut inner = self.inner.lock();
+            if let Some(forward) = inner.get_mut(&id) {
+                forward.info.local_port = bound;
+                if let Teardown::Remote { remote_port, .. } = &mut forward.teardown {
+                    *remote_port = bound;
+                }
+                info = forward.info.clone();
+            }
+            drop(inner);
+            (self.emit)(&info);
+        }
+
+        // The live count may already have moved; return what the card now holds.
+        Ok(self
+            .inner
+            .lock()
+            .get(&id)
+            .map(|forward| forward.info.clone())
+            .unwrap_or(info))
     }
 
     async fn accept_loop(
@@ -314,14 +456,33 @@ impl Forwards {
             .collect()
     }
 
-    /// Stops one forward: the listener closes and open connections drop.
+    /// Stops one forward: the listener closes and open connections drop. For a
+    /// remote forward, the route is forgotten and the server is asked to stop
+    /// listening.
     pub fn close(&self, id: &str) -> AppResult<()> {
         let forward = self
             .inner
             .lock()
             .remove(id)
             .ok_or_else(|| AppError::Forward(format!("no forward {id}")))?;
-        forward.task.abort();
+        match forward.teardown {
+            Teardown::Accept(task) => task.abort(),
+            Teardown::Remote {
+                opener,
+                registry,
+                bind_address,
+                remote_port,
+            } => {
+                // Stop routing at once; then tell the server, best-effort - a
+                // connection already down never answers, and the route is gone.
+                registry.unregister(u32::from(remote_port));
+                tauri::async_runtime::spawn(async move {
+                    let _ = opener
+                        .cancel_remote_forward(&bind_address, remote_port)
+                        .await;
+                });
+            }
+        }
         let mut info = forward.info;
         info.state = ForwardState::Closed;
         (self.emit)(&info);

@@ -43,6 +43,21 @@ enum Command {
         port: u16,
         reply: oneshot::Sender<Result<Channel<Msg>, russh::Error>>,
     },
+    /// Ask the server to listen on `bind_address:port` and forward connections
+    /// back - a remote (`-R`) forward. A `tcpip-forward` global request, which
+    /// only the session handle can send, so it too rides this queue. The reply
+    /// carries the bound port, which matters when `port` was 0.
+    RemoteForward {
+        bind_address: String,
+        port: u32,
+        reply: oneshot::Sender<Result<u32, russh::Error>>,
+    },
+    /// Tell the server to stop a remote forward it was doing.
+    CancelRemoteForward {
+        bind_address: String,
+        port: u32,
+        reply: oneshot::Sender<Result<(), russh::Error>>,
+    },
     Close,
 }
 
@@ -87,6 +102,56 @@ impl ChannelOpener {
                 AppError::SshChannel("the connection closed while opening a forward".into())
             })?
             .map_err(|err| AppError::SshChannel(err.to_string()))
+    }
+
+    /// Asks the server to listen on `bind_address:port` and forward what
+    /// arrives back over this connection, for a remote forward. Returns the
+    /// port the server bound: the one requested, or the one it chose when 0 was
+    /// asked for.
+    pub async fn remote_forward(&self, bind_address: &str, port: u16) -> AppResult<u16> {
+        let (reply, done) = oneshot::channel();
+        self.commands
+            .send(Command::RemoteForward {
+                bind_address: bind_address.to_string(),
+                port: u32::from(port),
+                reply,
+            })
+            .map_err(|_| AppError::SshChannel("the connection is closed".into()))?;
+        let bound = done
+            .await
+            .map_err(|_| {
+                AppError::SshChannel(
+                    "the connection closed while requesting a remote forward".into(),
+                )
+            })?
+            .map_err(|err| {
+                AppError::Forward(format!("the server refused the remote forward: {err}"))
+            })?;
+        // The server reports the chosen port only when we asked for 0; for any
+        // other port it keeps ours and returns 0, so fall back to what we named.
+        Ok(if port == 0 { bound as u16 } else { port })
+    }
+
+    /// Tells the server to stop a remote forward. Best-effort: a session on its
+    /// way down may never answer, and the route is already forgotten locally.
+    pub async fn cancel_remote_forward(&self, bind_address: &str, port: u16) -> AppResult<()> {
+        let (reply, done) = oneshot::channel();
+        self.commands
+            .send(Command::CancelRemoteForward {
+                bind_address: bind_address.to_string(),
+                port: u32::from(port),
+                reply,
+            })
+            .map_err(|_| AppError::SshChannel("the connection is closed".into()))?;
+        done.await
+            .map_err(|_| {
+                AppError::SshChannel(
+                    "the connection closed while cancelling a remote forward".into(),
+                )
+            })?
+            .map_err(|err| {
+                AppError::Forward(format!("cancelling the remote forward failed: {err}"))
+            })
     }
 }
 
@@ -251,6 +316,22 @@ where
                         .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
                         .await;
                     let _ = reply.send(opened);
+                    Ok(())
+                }
+                Command::RemoteForward {
+                    bind_address,
+                    port,
+                    reply,
+                } => {
+                    let _ = reply.send(session.tcpip_forward(bind_address, port).await);
+                    Ok(())
+                }
+                Command::CancelRemoteForward {
+                    bind_address,
+                    port,
+                    reply,
+                } => {
+                    let _ = reply.send(session.cancel_tcpip_forward(bind_address, port).await);
                     Ok(())
                 }
                 Command::Close => break,

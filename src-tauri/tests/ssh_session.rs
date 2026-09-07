@@ -20,7 +20,7 @@ use harbour_lib::error::AppResult;
 use harbour_lib::files::EntryKind;
 use harbour_lib::session::{ExitReason, Transport};
 use harbour_lib::ssh::client::{self, ConnectRequest, Endpoint};
-use harbour_lib::ssh::forward::{ForwardSpec, Forwards};
+use harbour_lib::ssh::forward::{ForwardInfo, ForwardKind, ForwardSpec, Forwards, RemoteSpec};
 use harbour_lib::ssh::known_hosts::KnownHosts;
 use harbour_lib::ssh::sftp;
 use harbour_lib::ssh::{
@@ -55,10 +55,27 @@ const EXIT_CODE: u32 = 7;
 /// rather than only on what came back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Seen {
-    Pty { term: String, cols: u32, rows: u32 },
-    Resize { cols: u32, rows: u32 },
+    Pty {
+        term: String,
+        cols: u32,
+        rows: u32,
+    },
+    Resize {
+        cols: u32,
+        rows: u32,
+    },
     Input(Vec<u8>),
-    DirectTcpip { host: String, port: u32 },
+    DirectTcpip {
+        host: String,
+        port: u32,
+    },
+    TcpipForward {
+        address: String,
+        port: u32,
+    },
+    /// What came back over a `forwarded-tcpip` channel the server pushed - so a
+    /// remote-forward test can prove the client relayed it to a local target.
+    Forwarded(Vec<u8>),
 }
 
 #[derive(Clone)]
@@ -241,6 +258,47 @@ impl russh::server::Handler for TestServer {
             });
         }
         Ok(())
+    }
+
+    /// Accepts a reverse-forward request and, to emulate a connection arriving
+    /// on the listened port, immediately pushes a `forwarded-tcpip` channel
+    /// back: it sends a probe and reads what the client relays from the local
+    /// target, so a test can prove the whole round trip. This is the server end
+    /// of `ssh -R`.
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        port: &mut u32,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        let _ = self.seen.send(Seen::TcpipForward {
+            address: address.to_string(),
+            port: *port,
+        });
+
+        let handle = session.handle();
+        let seen = self.seen.clone();
+        let connected_address = address.to_string();
+        let connected_port = *port;
+        tokio::spawn(async move {
+            let Ok(channel) = handle
+                .channel_open_forwarded_tcpip(connected_address, connected_port, "origin", 54321)
+                .await
+            else {
+                return;
+            };
+            let mut stream = channel.into_stream();
+            if stream.write_all(b"harbour-probe").await.is_err() {
+                return;
+            }
+            let mut buf = vec![0u8; 64];
+            if let Ok(n) = stream.read(&mut buf).await {
+                buf.truncate(n);
+                let _ = seen.send(Seen::Forwarded(buf));
+            }
+        });
+
+        Ok(true)
     }
 
     /// Echoes input, except `exit`, which ends the shell with [`EXIT_CODE`].
@@ -1129,7 +1187,11 @@ async fn the_connection_registry_shares_one_sftp_channel_per_session() {
     .expect("the connection should succeed");
 
     let connections = sftp::Connections::new();
-    connections.register("s1".into(), connected.transport.opener());
+    connections.register(
+        "s1".into(),
+        connected.transport.opener(),
+        connected.remote_forwards,
+    );
 
     let first = connections.sftp("s1").await.unwrap();
     let second = connections.sftp("s1").await.unwrap();
@@ -1752,6 +1814,126 @@ async fn a_local_forward_carries_a_connection_to_a_remote_target() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(rebound, "the forward should have released its port");
+}
+
+// ---------------------------------------------------------------------------
+// Remote port forwarding
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_remote_forward_delivers_a_server_connection_to_a_local_target() {
+    // The local target the server's forwarded connection should reach. It reads
+    // the probe and answers "pong", which must travel back to the server.
+    let target = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let target_port = target.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = target.accept().await {
+            let mut buf = [0u8; 64];
+            let _ = socket.read(&mut buf).await;
+            let _ = socket.write_all(b"pong").await;
+        }
+    });
+
+    let mut server = start_server().await;
+    let connected = client::connect(
+        request(server.addr, vec![AuthChoice::Password]),
+        ScriptedAsker::trusting(PASSWORD),
+        Arc::new(temp_known_hosts()),
+        |_, _| {},
+    )
+    .await
+    .expect("the connection should succeed");
+
+    // Drive the real engine so the register-before-request ordering and the
+    // connection-count hook are exercised, not just the handler.
+    let (info_tx, mut info_rx) = mpsc::unbounded_channel();
+    let forwards = Forwards::new(Arc::new(move |info: &ForwardInfo| {
+        let _ = info_tx.send(info.clone());
+    }));
+
+    // Nothing binds this on the server in the test harness; it only names the
+    // route, so any non-zero port serves.
+    let remote_port = 42_000u16;
+    let forward = forwards
+        .open_remote(
+            "s1".into(),
+            connected.transport.opener(),
+            connected.remote_forwards,
+            RemoteSpec {
+                bind_address: "127.0.0.1".into(),
+                remote_port,
+                host: "127.0.0.1".into(),
+                port: target_port,
+            },
+        )
+        .await
+        .expect("the remote forward should be accepted");
+    assert_eq!(forward.kind, ForwardKind::Remote);
+    assert_eq!(
+        forward.local_port, remote_port,
+        "the requested port is kept"
+    );
+
+    // The server saw the reverse-forward request for the port we asked for.
+    let requested = wait_for_seen(
+        &mut server.seen,
+        |event| matches!(event, Seen::TcpipForward { port, .. } if *port == u32::from(remote_port)),
+    )
+    .await;
+    assert!(
+        requested,
+        "the server should have seen the tcpip-forward request"
+    );
+
+    // The connection the server pushed back reached our local target and its
+    // "pong" made the whole round trip.
+    let round_tripped = wait_for_seen(
+        &mut server.seen,
+        |event| matches!(event, Seen::Forwarded(bytes) if bytes == b"pong"),
+    )
+    .await;
+    assert!(
+        round_tripped,
+        "the forwarded connection should have reached the local target and echoed back"
+    );
+
+    // The forward's card counted the connection.
+    let counted = wait_for_info(&mut info_rx, |info| info.connections >= 1).await;
+    assert!(counted, "the forward should report at least one connection");
+
+    // Closing tells the server to stop and forgets the route.
+    forwards.close(&forward.id).unwrap();
+    assert!(forwards.list().is_empty());
+}
+
+/// Waits briefly for the server to report an event matching `want`.
+async fn wait_for_seen(
+    seen: &mut mpsc::UnboundedReceiver<Seen>,
+    want: impl Fn(&Seen) -> bool,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, seen.recv()).await {
+            Ok(Some(event)) if want(&event) => return true,
+            Ok(Some(_)) => continue,
+            _ => return false,
+        }
+    }
+}
+
+/// Waits briefly for a forward update matching `want`.
+async fn wait_for_info(
+    info: &mut mpsc::UnboundedReceiver<ForwardInfo>,
+    want: impl Fn(&ForwardInfo) -> bool,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, info.recv()).await {
+            Ok(Some(event)) if want(&event) => return true,
+            Ok(Some(_)) => continue,
+            _ => return false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

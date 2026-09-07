@@ -255,7 +255,10 @@ resolved on the far side, so `localhost` is the server's own. A forward can be
 exposed on the network with an explicit opt-in that is warned about. The same
 panel also opens a **dynamic SOCKS5 proxy** (`ssh -D`): point an application's
 SOCKS proxy at the bound port and every connection it makes is tunnelled through
-the session, reaching whatever the session can.
+the session, reaching whatever the session can. And it opens a **remote forward**
+(`ssh -R`), which runs the other way: the server listens on a port and each
+connection it accepts is delivered to a target this machine reaches - the way to
+expose something local to the remote side.
 
 ## The command palette
 
@@ -401,7 +404,8 @@ src-tauri/src/    Rust core
   files/          directory listings, local and remote, in one shape
   transfer/       the queue, and the bytes it moves
   edit.rs         a remote file in a local editor, uploaded on save
-  ssh/forward.rs  local port forwards on a session's connection
+  ssh/forward.rs  local, dynamic (SOCKS) and remote port forwards on a session
+  ssh/remote.rs   the routing table a remote (-R) forward's channels come back to
   ssh/            connect and auth, channel transport, sftp, known_hosts, agent
   vault/          sqlite host store, os keychain or master-password file,
                   encrypted export/import, ssh_config and xshell imports

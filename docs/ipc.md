@@ -525,6 +525,7 @@ type EditInfo = {
 | --- | --- | --- |
 | `forward_open_local` | `sessionId: string`, `spec: ForwardSpec` | `ForwardInfo` |
 | `forward_open_dynamic` | `sessionId: string`, `bindAddress: string`, `localPort: number` | `ForwardInfo` |
+| `forward_open_remote` | `sessionId: string`, `spec: RemoteSpec` | `ForwardInfo` |
 | `forward_list` | - | `ForwardInfo[]` |
 | `forward_close` | `id: string` | `void` |
 
@@ -543,6 +544,15 @@ application reaches whatever the session can. Its `ForwardInfo` has
 `kind: "dynamic"` and an empty `host`/`port`, since the target varies per
 connection; a local forward has `kind: "local"`.
 
+`forward_open_remote` is `ssh -R`: it runs the other way. Harbour asks the
+server to listen (a `tcpip-forward` global request); each connection the server
+accepts there it pushes back as a `forwarded-tcpip` channel, which the
+connection handler routes to a target *this* machine reaches. The request goes
+out inside the command, so a port already in use on the remote, or a server that
+forbids forwarding, is an error there. Its `ForwardInfo` has `kind: "remote"`,
+`localPort` is the port the *server* listens on (the one requested, or the one
+it chose for a `remotePort` of 0), and `host`/`port` name the local target.
+
 ```ts
 type ForwardSpec = {
   bindAddress: string;   // 127.0.0.1 keeps it local; 0.0.0.0 exposes it
@@ -551,11 +561,19 @@ type ForwardSpec = {
   port: number;
 };
 
+type RemoteSpec = {
+  bindAddress: string;   // where the server listens; empty/localhost is its loopback
+  remotePort: number;    // the server's port; 0 lets it choose, reported back
+  host: string;          // the target, reached from this machine
+  port: number;
+};
+
 type ForwardInfo = {
   id: string;
   sessionId: string;
+  kind: "local" | "dynamic" | "remote";
   bindAddress: string;
-  localPort: number;     // the port actually bound
+  localPort: number;     // the bound port: local for -L/-D, the server's for -R
   host: string;
   port: number;
   state: "listening" | "closed" | "failed";

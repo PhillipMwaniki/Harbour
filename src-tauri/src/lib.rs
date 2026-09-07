@@ -225,6 +225,7 @@ pub fn run() {
             commands::transfer::edit_close,
             commands::forward::forward_open_local,
             commands::forward::forward_open_dynamic,
+            commands::forward::forward_open_remote,
             commands::forward::forward_list,
             commands::forward::forward_close,
         ])

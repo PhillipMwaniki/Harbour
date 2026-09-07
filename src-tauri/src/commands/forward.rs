@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::ssh::forward::{ForwardInfo, ForwardSpec};
+use crate::ssh::forward::{ForwardInfo, ForwardSpec, RemoteSpec};
 use crate::AppState;
 
 /// Opens a local port forward on `session_id`'s connection. The bind happens
@@ -38,6 +38,24 @@ pub async fn forward_open_dynamic(
     state
         .forwards
         .open_dynamic(session_id, opener, bind_address, local_port)
+        .await
+}
+
+/// Opens a remote port forward on `session_id`'s connection - `ssh -R`. The
+/// server listens; connections it accepts are delivered to a target this
+/// machine can reach. The `tcpip-forward` request goes out now, so a refusal
+/// (port in use on the remote, or forwarding forbidden) is an error here.
+#[tauri::command]
+pub async fn forward_open_remote(
+    state: State<'_, AppState>,
+    session_id: String,
+    spec: RemoteSpec,
+) -> AppResult<ForwardInfo> {
+    let opener = state.connections.opener(&session_id)?;
+    let registry = state.connections.remote_forwards(&session_id)?;
+    state
+        .forwards
+        .open_remote(session_id, opener, registry, spec)
         .await
 }
 
