@@ -257,6 +257,13 @@ panel also opens a **dynamic SOCKS5 proxy** (`ssh -D`): point an application's
 SOCKS proxy at the bound port and every connection it makes is tunnelled through
 the session, reaching whatever the session can.
 
+## The command palette
+
+**Ctrl+K** opens the command palette: a fuzzy launcher for everything. Type a
+few letters to connect to any saved host, open a dialog, toggle a panel, or run
+a command - `nsh` finds "New SSH", `dbpr` finds your `db-prod` host - then Enter
+to run it, without leaving the keyboard.
+
 ## Snippets and the shell
 
 **Ctrl+Shift+I** opens the snippet palette: type to filter your saved commands,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FileDock } from "@/components/files/FileDock";
 import { ForwardPanel } from "@/components/forward/ForwardPanel";
@@ -10,6 +10,7 @@ import { PaneTree } from "@/components/terminal/PaneTree";
 import { PasteDialog } from "@/components/terminal/PasteDialog";
 import { SnippetPalette } from "@/components/terminal/SnippetPalette";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { CommandPalette, type PaletteCommand } from "@/components/CommandPalette";
 import { paneHandle } from "@/components/terminal/registry";
 import { TabBar } from "@/components/terminal/TabBar";
 import { HostDialog } from "@/components/vault/HostDialog";
@@ -66,7 +67,8 @@ type Modal =
   | { kind: "import"; source: ImportSource }
   | { kind: "backup"; mode: BackupMode }
   | { kind: "master"; mode: MasterMode }
-  | { kind: "fleet" };
+  | { kind: "fleet" }
+  | { kind: "palette" };
 
 export default function App() {
   const tabs = useSessions((state) => state.tabs);
@@ -268,6 +270,34 @@ export default function App() {
     bc.start(ids);
   }, []);
 
+  // Everything the command palette can launch: every saved host, plus the
+  // actions a person reaches for. Rebuilt when the host list changes.
+  const paletteCommands = useMemo<PaletteCommand[]>(() => {
+    const hostCommands: PaletteCommand[] = vaultTree.hosts.map((host) => ({
+      id: `host:${host.id}`,
+      label: `Connect: ${host.name}`,
+      hint:
+        host.port === 22
+          ? `${host.username}@${host.hostname}`
+          : `${host.username}@${host.hostname}:${host.port}`,
+      keywords: `${host.hostname} ${host.username}`,
+      run: () => connectHost(host),
+    }));
+    const actionCommands: PaletteCommand[] = [
+      { id: "act:new-terminal", label: "New terminal", run: () => useSessions.getState().openTab({ kind: "local" }) },
+      { id: "act:new-connection", label: "New connection (SSH / Telnet / Serial)…", run: () => setModal({ kind: "connect" }) },
+      { id: "act:fleet", label: "Run on many hosts…", run: () => setModal({ kind: "fleet" }) },
+      { id: "act:broadcast", label: "Toggle broadcast input", run: toggleBroadcast },
+      { id: "act:files", label: "Toggle file panes", run: () => useFiles.getState().toggle() },
+      { id: "act:forwards", label: "Toggle port forwards", run: () => useForwards.getState().toggle() },
+      { id: "act:sessions", label: "Toggle the session manager", run: () => setSidebar((open) => !open) },
+      { id: "act:export", label: "Export vault…", run: () => setModal({ kind: "backup", mode: "export" }) },
+      { id: "act:import", label: "Import vault…", run: () => setModal({ kind: "backup", mode: "import" }) },
+      { id: "act:settings", label: "Settings…", run: () => setModal({ kind: "settings" }) },
+    ];
+    return [...actionCommands, ...hostCommands];
+  }, [vaultTree.hosts, connectHost, toggleBroadcast]);
+
   const saveHost = useCallback(
     async (input: HostInput, themeId: string | null) => {
       const editing = modal.kind === "host" ? modal.host : null;
@@ -360,6 +390,9 @@ export default function App() {
           return;
         case "settings.open":
           setModal({ kind: "settings" });
+          return;
+        case "palette.open":
+          setModal({ kind: "palette" });
           return;
         case "snippets.open":
           setSnippetsOpen(true);
@@ -655,6 +688,13 @@ export default function App() {
           )}
 
           {modal.kind === "fleet" && <FleetDialog onClose={() => setModal({ kind: "none" })} />}
+
+          {modal.kind === "palette" && (
+            <CommandPalette
+              commands={paletteCommands}
+              onClose={() => setModal({ kind: "none" })}
+            />
+          )}
 
           {modal.kind === "master" && (
             <MasterPasswordDialog
