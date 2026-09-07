@@ -90,8 +90,9 @@ pub async fn ssh_connect(
     );
 
     // Taken before the transport is boxed away: this is what lets the file
-    // pane open SFTP on the same connection later.
+    // pane open SFTP, and a remote forward route back, on the same connection.
     let opener = connected.transport.opener();
+    let remote_forwards = connected.remote_forwards;
     let info = state.sessions.adopt(NewSession {
         id,
         kind: SessionKind::Ssh,
@@ -99,7 +100,9 @@ pub async fn ssh_connect(
         transport: Box::new(connected.transport),
         output: connected.output,
     });
-    state.connections.register(info.session_id.clone(), opener);
+    state
+        .connections
+        .register(info.session_id.clone(), opener, remote_forwards);
 
     let _ = app.emit("session:opened", &info);
     Ok(info)

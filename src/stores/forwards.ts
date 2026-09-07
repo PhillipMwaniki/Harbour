@@ -5,8 +5,10 @@ import {
   forwardList,
   forwardOpenDynamic,
   forwardOpenLocal,
+  forwardOpenRemote,
   type ForwardInfo,
   type ForwardSpec,
+  type RemoteSpec,
 } from "@/ipc/forward";
 import { errorMessage } from "@/ipc/types";
 
@@ -28,6 +30,7 @@ export interface ForwardsState {
     bindAddress: string,
     localPort: number,
   ) => Promise<ForwardInfo | null>;
+  openRemote: (sessionId: string, spec: RemoteSpec) => Promise<ForwardInfo | null>;
   close: (id: string) => Promise<void>;
   /** Drops every forward for a session, once it is gone. */
   forget: (sessionId: string) => void;
@@ -80,6 +83,19 @@ export const useForwards = create<ForwardsState>((set) => ({
       set((state) => ({ forwards: upsert(state.forwards, forward), error: null, open: true }));
       return forward;
     } catch (err) {
+      set({ error: errorMessage(err), open: true });
+      return null;
+    }
+  },
+
+  openRemote: async (sessionId, spec) => {
+    try {
+      const forward = await forwardOpenRemote(sessionId, spec);
+      set((state) => ({ forwards: upsert(state.forwards, forward), error: null, open: true }));
+      return forward;
+    } catch (err) {
+      // The server refusing the listen (port in use, or forwarding forbidden)
+      // is the common failure; the panel shows it.
       set({ error: errorMessage(err), open: true });
       return null;
     }

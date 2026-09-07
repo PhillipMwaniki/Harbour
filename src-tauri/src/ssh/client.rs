@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use crate::error::{AppError, AppResult};
 use crate::session::ExitReason;
 use crate::ssh::known_hosts::{fingerprint, KnownHosts, Verdict};
+use crate::ssh::remote::RemoteForwards;
 use crate::ssh::transport::{self, SshTransport};
 use crate::ssh::{
     agent, Asker, AuthChoice, HostKeyAnswer, HostKeyQuestion, HostKeyStatus, SecretAnswer,
@@ -105,6 +106,11 @@ pub struct Connected {
     pub fingerprint: String,
     /// Which method authenticated, for the log and the UI.
     pub method: &'static str,
+    /// The routing table for this connection's remote (`-R`) forwards. The
+    /// connection handler reads it to place incoming `forwarded-tcpip`
+    /// channels; the forward engine registers targets in it. Empty until a
+    /// remote forward is opened.
+    pub remote_forwards: Arc<RemoteForwards>,
 }
 
 /// Connects, authenticates, and starts a remote shell.
@@ -155,7 +161,11 @@ pub async fn connect_chain<F>(
 where
     F: FnOnce(ExitReason, Option<u32>) + Send + 'static,
 {
-    let established = establish(&jumps, &dest, &known_hosts).await?;
+    // The table the destination's handler routes incoming forwarded-tcpip
+    // channels through; carried out on `Connected` so the forward engine can
+    // register targets in the same one the handler reads.
+    let remote_forwards = Arc::new(RemoteForwards::default());
+    let established = establish(&jumps, &dest, &known_hosts, &remote_forwards).await?;
     let Established {
         session,
         hops,
@@ -204,6 +214,7 @@ where
         output: running.output,
         fingerprint,
         method,
+        remote_forwards,
     })
 }
 
@@ -225,6 +236,7 @@ async fn establish(
     jumps: &[Endpoint],
     dest: &Endpoint,
     known_hosts: &Arc<KnownHosts>,
+    remote_forwards: &Arc<RemoteForwards>,
 ) -> AppResult<Established> {
     let cfg = Arc::new(config());
 
@@ -274,7 +286,8 @@ async fn establish(
         Arc::clone(known_hosts),
         Arc::clone(&dest.asker),
     )
-    .recording(Arc::clone(&accepted));
+    .recording(Arc::clone(&accepted))
+    .forwarding(Arc::clone(remote_forwards));
     let mut session = russh::client::connect_stream(cfg, stream, handler).await?;
     let method = authenticate(
         &mut session,
@@ -319,7 +332,10 @@ pub async fn run_command(
     known_hosts: Arc<KnownHosts>,
     command: &str,
 ) -> AppResult<CommandOutcome> {
-    let established = establish(&jumps, &dest, &known_hosts).await?;
+    // A one-shot command never asks the server to forward anything, so its
+    // routing table stays empty and is dropped with the connection.
+    let remote_forwards = Arc::new(RemoteForwards::default());
+    let established = establish(&jumps, &dest, &known_hosts, &remote_forwards).await?;
     let mut channel = established
         .session
         .channel_open_session()
@@ -710,6 +726,9 @@ struct ClientHandler {
     /// Set to the accepted host key's fingerprint. Only the destination's is
     /// read; a jump's handler leaves it `None`.
     accepted: Arc<Mutex<Option<String>>>,
+    /// Where incoming `forwarded-tcpip` channels are routed. Empty for a jump,
+    /// and for a destination until a remote forward is opened on it.
+    remote_forwards: Arc<RemoteForwards>,
 }
 
 impl ClientHandler {
@@ -720,12 +739,20 @@ impl ClientHandler {
             known_hosts,
             asker,
             accepted: Arc::new(Mutex::new(None)),
+            remote_forwards: Arc::new(RemoteForwards::default()),
         }
     }
 
     /// Records the accepted fingerprint into a shared slot the caller reads.
     fn recording(mut self, accepted: Arc<Mutex<Option<String>>>) -> Self {
         self.accepted = accepted;
+        self
+    }
+
+    /// Routes this connection's `forwarded-tcpip` channels through `forwards` -
+    /// the table the forward engine registers remote-forward targets in.
+    fn forwarding(mut self, forwards: Arc<RemoteForwards>) -> Self {
+        self.remote_forwards = forwards;
         self
     }
 }
@@ -804,6 +831,59 @@ impl Handler for ClientHandler {
     ) -> AppResult<()> {
         tracing::info!(host = %self.host, banner = %banner.trim(), "server banner");
         Ok(())
+    }
+
+    /// A connection the server accepted on a remote-forwarded port, arriving as
+    /// a channel we must place. This is the receiving end of `ssh -R`: look up
+    /// the port in the routing table, and if a forward owns it, accept the
+    /// channel and copy it to the local target both ways. An unowned port -
+    /// a forward already closed, or one that was never ours - is rejected,
+    /// which is what the server relays back to whatever connected.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> AppResult<()> {
+        match self.remote_forwards.accept(connected_port) {
+            Some((host, port)) => {
+                reply.accept().await;
+                tauri::async_runtime::spawn(async move {
+                    match tokio::net::TcpStream::connect((host.as_str(), port)).await {
+                        Ok(mut socket) => {
+                            let _ = socket.set_nodelay(true);
+                            let mut stream = channel.into_stream();
+                            // Ends when either side closes; a forwarded
+                            // connection ending is normal and says nothing
+                            // about the forward, which stays up.
+                            let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
+                        }
+                        Err(err) => {
+                            // The local target refused or is gone. Dropping the
+                            // channel closes it, which the far end reads as the
+                            // connection failing - the honest outcome.
+                            tracing::debug!(%host, port, error = %err, "remote forward: local connect failed");
+                        }
+                    }
+                });
+                Ok(())
+            }
+            None => {
+                tracing::debug!(
+                    port = connected_port,
+                    address = %connected_address,
+                    "forwarded-tcpip for an unregistered port; rejecting"
+                );
+                reply
+                    .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+                Ok(())
+            }
+        }
     }
 }
 
