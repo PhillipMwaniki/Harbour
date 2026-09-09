@@ -852,7 +852,7 @@ impl Handler for ClientHandler {
         match self.remote_forwards.accept(connected_port) {
             Some((host, port)) => {
                 reply.accept().await;
-                tauri::async_runtime::spawn(async move {
+                tokio::task::spawn(async move {
                     match tokio::net::TcpStream::connect((host.as_str(), port)).await {
                         Ok(mut socket) => {
                             let _ = socket.set_nodelay(true);
