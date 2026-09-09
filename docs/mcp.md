@@ -66,6 +66,22 @@ Acting on hosts (only with `--allow-write`):
 connection for the operation and closes it after. Guarded hosts are refused, as
 for command execution.
 
+Port forwards (held open until closed):
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `harbour_forward_open` | `host`, `kind` (`local`/`dynamic`/`remote`), `bindAddress?`, `listenPort?`, `targetHost?`, `targetPort?` | the forward, including the bound port when `listenPort` was 0 |
+| `harbour_forward_list` | – | the forwards the server is holding open |
+| `harbour_forward_close` | `id` | `{ closed: id }` |
+
+`kind: "local"` (`ssh -L`) listens on `bindAddress:listenPort` on this machine
+and delivers each connection to `targetHost:targetPort` reached from the host;
+`"dynamic"` (`ssh -D`) is a local SOCKS5 proxy; `"remote"` (`ssh -R`) asks the
+host to listen and delivers to `targetHost:targetPort` reached from this
+machine. `listenPort: 0` (the default) binds a free port, reported back. Unlike
+the other tools, a forward's connection is **held open** for the life of the
+forward - until `harbour_forward_close`, or the server exits.
+
 `harbour_run_command` reports a host it could not reach or run on as a tool
 error (`isError`); a command that ran and exited non-zero is a success carrying
 that `exitCode`. `harbour_run_fleet` never fails as a whole - each host's
@@ -83,7 +99,7 @@ connecting at once.
 - **Secrets stay in.** No password, key or passphrase ever appears in a tool
   result or in the logs (which go to stderr, never stdout).
 
-## Scope
+## Design
 
-This is an evolving preview. Port forwarding is planned next; see
+The full design and its phasing are in
 [`docs/proposals/harbour-mcp.md`](proposals/harbour-mcp.md).

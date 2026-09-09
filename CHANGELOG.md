@@ -12,10 +12,11 @@ All notable changes to Harbour are recorded here. The format follows
   the app with no GUI. It speaks MCP over stdio and offers read-only inventory
   (`harbour_list_hosts`, `harbour_list_folders`) plus, behind an `--allow-write`
   opt-in, command execution on a host and across a fleet (`harbour_run_command`,
-  `harbour_run_fleet`) and SFTP list/read/write (`harbour_sftp_list`,
-  `harbour_sftp_read`, `harbour_sftp_write`) - non-interactive, keychain-only,
-  refusing unknown host keys and guarded hosts, exactly like the fleet runner.
-  Port forwards follow. See `docs/mcp.md`.
+  `harbour_run_fleet`), SFTP list/read/write (`harbour_sftp_list`,
+  `harbour_sftp_read`, `harbour_sftp_write`), and port forwards
+  (`harbour_forward_open`/`list`/`close`, local, dynamic and remote) - all
+  non-interactive, keychain-only, refusing unknown host keys and guarded hosts,
+  exactly like the fleet runner. See `docs/mcp.md`.
 - **Remote port forwarding (`ssh -R`).** The third forward direction: the
   server listens on a port and each connection it accepts is delivered to a
   target this machine can reach, over the session's existing connection. Choose
