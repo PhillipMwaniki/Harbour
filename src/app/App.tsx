@@ -46,6 +46,7 @@ import {
   resolveBindings,
   type ActionId,
 } from "@/lib/keymap";
+import { writeClipboard } from "@/lib/clipboard";
 import type { SplitDirection } from "@/lib/panes";
 import { toggleLog } from "@/lib/sessionLog";
 import { activePrompt, usePrompts } from "@/stores/prompts";
@@ -352,6 +353,14 @@ export default function App() {
         case "terminal.newSsh":
           setModal({ kind: "connect" });
           return;
+        case "terminal.copy": {
+          // Copy the terminal selection. With nothing selected there is
+          // nothing to copy - and Ctrl+C stays the interrupt, never a copy, so
+          // this must not touch the clipboard in that case.
+          const text = paneHandle(focused?.pane.paneId)?.selection() ?? "";
+          if (text !== "") void writeClipboard(text);
+          return;
+        }
         case "terminal.clear":
           paneHandle(focused?.pane.paneId)?.clear();
           return;

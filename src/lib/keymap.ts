@@ -14,6 +14,7 @@
 export type ActionId =
   | "terminal.new"
   | "terminal.newSsh"
+  | "terminal.copy"
   | "terminal.clear"
   | "pane.close"
   | "pane.splitRight"
@@ -54,6 +55,12 @@ export const actions: ActionSpec[] = [
     label: "New SSH connection",
     group: "Terminals",
     defaults: ["Ctrl+Shift+N"],
+  },
+  {
+    id: "terminal.copy",
+    label: "Copy the selection",
+    group: "Terminals",
+    defaults: ["Ctrl+Shift+C"],
   },
   {
     id: "terminal.clear",
