@@ -51,12 +51,20 @@ Read-only (always available):
 | `harbour_list_hosts` | – | saved hosts: id, name, hostname, port, username, folder, jump host, guarded, whether a password is saved |
 | `harbour_list_folders` | – | the folder tree: id, name, parent |
 
-Execution (only with `--allow-write`):
+Acting on hosts (only with `--allow-write`):
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
 | `harbour_run_command` | `host` (id or unique name), `command` | `{ host, exitCode, stdout, stderr }`, or a tool error if the host could not be reached or run |
 | `harbour_run_fleet` | `hosts` (ids or names), `command` | `{ results: [{ host, exitCode, stdout, stderr, error }] }`, one per host |
+| `harbour_sftp_list` | `host`, `path` (default: login dir) | the directory listing |
+| `harbour_sftp_read` | `host`, `path`, `maxBytes` (default 1 MiB) | `{ path, encoding, content }` — `encoding` is `utf-8`, or `base64` when the file is not valid UTF-8 |
+| `harbour_sftp_write` | `host`, `path`, `content`, `base64` (default false) | `{ path, bytesWritten }` |
+
+`harbour_sftp_read` refuses a file larger than `maxBytes` without reading it, and
+`harbour_sftp_write` creates or truncates the file. Each SFTP call opens a fresh
+connection for the operation and closes it after. Guarded hosts are refused, as
+for command execution.
 
 `harbour_run_command` reports a host it could not reach or run on as a tool
 error (`isError`); a command that ran and exited non-zero is a success carrying
@@ -77,5 +85,5 @@ connecting at once.
 
 ## Scope
 
-This is an evolving preview. SFTP (read/write/list) and port forwarding are
-planned next; see [`docs/proposals/harbour-mcp.md`](proposals/harbour-mcp.md).
+This is an evolving preview. Port forwarding is planned next; see
+[`docs/proposals/harbour-mcp.md`](proposals/harbour-mcp.md).

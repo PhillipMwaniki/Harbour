@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use russh_sftp::client::SftpSession;
+pub use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::FileType;
 
 use crate::error::{AppError, AppResult};
@@ -140,6 +140,31 @@ pub async fn chmod(sftp: &SftpSession, path: &str, mode: u32) -> AppResult<()> {
         ..Default::default()
     };
     sftp.set_metadata(path, attrs)
+        .await
+        .map_err(|err| path_error(path, err))
+}
+
+/// Reads a whole remote file, refusing one larger than `max_bytes` rather than
+/// pulling an unbounded amount into memory - Harbour's transfers are the way to
+/// move large files. The size is checked first, so an oversized file is never
+/// read at all.
+pub async fn read_file(sftp: &SftpSession, path: &str, max_bytes: u64) -> AppResult<Vec<u8>> {
+    let size = sftp
+        .metadata(path)
+        .await
+        .map_err(|err| path_error(path, err))?
+        .len();
+    if size > max_bytes {
+        return Err(AppError::Sftp(format!(
+            "{path} is {size} bytes, over the {max_bytes}-byte limit; use a transfer for large files"
+        )));
+    }
+    sftp.read(path).await.map_err(|err| path_error(path, err))
+}
+
+/// Writes `data` to a remote file, creating it or truncating what is there.
+pub async fn write_file(sftp: &SftpSession, path: &str, data: &[u8]) -> AppResult<()> {
+    sftp.write(path, data)
         .await
         .map_err(|err| path_error(path, err))
 }
