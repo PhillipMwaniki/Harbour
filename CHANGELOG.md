@@ -16,6 +16,9 @@ All notable changes to Harbour are recorded here. The format follows
   with Connect, Edit, Duplicate, Copy address, Forget saved password, and
   Delete. Duplicate makes a copy under a "… copy" name in the same folder,
   without carrying the saved password across.
+- **Folder management.** Right-click a folder for New host here, New subfolder,
+  Rename, and Delete, and a New folder button in the sidebar - so the folder
+  tree can be built and reorganised in the app rather than only through imports.
 
 ### Fixed
 

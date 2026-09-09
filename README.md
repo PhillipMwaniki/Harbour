@@ -111,7 +111,9 @@ records where to connect, as whom, and which authentication methods to try.
 **Right-click** a host for its actions: connect, edit, duplicate, copy the
 `user@host` address, forget its saved password, or delete it. Duplicate makes a
 copy in the same folder for a host you want to vary slightly - a different user
-or port - without re-entering everything.
+or port - without re-entering everything. **Right-click a folder** to add a host
+or subfolder inside it, rename it, or delete it; the New folder button in the
+sidebar header starts one at the top level (or inside the selected folder).
 
 Passwords are not typed into the host form. They are asked for by the
 connection, at the moment one is needed, with the option to save it - and a

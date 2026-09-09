@@ -13,6 +13,7 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 import { CommandPalette, type PaletteCommand } from "@/components/CommandPalette";
 import { paneHandle } from "@/components/terminal/registry";
 import { TabBar } from "@/components/terminal/TabBar";
+import { FolderDialog } from "@/components/vault/FolderDialog";
 import { HostDialog } from "@/components/vault/HostDialog";
 import { ImportDialog, type ImportSource } from "@/components/vault/ImportDialog";
 import { VaultBackupDialog, type BackupMode } from "@/components/vault/VaultBackupDialog";
@@ -25,16 +26,20 @@ import { onForwardUpdate } from "@/ipc/forward";
 import { onEditUpdate, onTransferUpdate } from "@/ipc/transfer";
 import {
   copyName,
+  createFolder,
   createHost,
+  deleteFolder,
   deleteHost,
   forgetSecrets,
   hostToInput,
   keychainAvailable,
+  renameFolder,
   secretStoreStatus,
   updateHost,
 } from "@/ipc/vault";
 import {
   errorMessage,
+  type Folder,
   type Host,
   type HostInput,
   type HostKeyAnswer,
@@ -67,6 +72,8 @@ type Modal =
   | { kind: "connect" }
   | { kind: "settings" }
   | { kind: "host"; host: Host | null }
+  /** Create a folder under `parentId`, or rename `folder`. */
+  | { kind: "folder"; folder: Folder | null; parentId: string | null }
   | { kind: "import"; source: ImportSource }
   | { kind: "backup"; mode: BackupMode }
   | { kind: "master"; mode: MasterMode }
@@ -362,6 +369,49 @@ export default function App() {
     await useVault.getState().refresh();
   }, []);
 
+  // Create or rename a folder from the folder dialog. A new folder is revealed
+  // and selected so it is obvious where it landed.
+  const saveFolder = useCallback(
+    async (name: string) => {
+      const target = modal.kind === "folder" ? modal : null;
+      setModal({ kind: "none" });
+      if (!target) return;
+      try {
+        if (target.folder) {
+          await renameFolder(target.folder.id, name);
+          await useVault.getState().refresh();
+        } else {
+          const created = await createFolder(target.parentId, name);
+          await useVault.getState().refresh();
+          if (created.parentId) useVault.getState().expand(created.parentId);
+          useVault.getState().select({ kind: "folder", id: created.id });
+        }
+      } catch (err) {
+        setBanner(`Could not save the folder: ${errorMessage(err)}`);
+      }
+    },
+    [modal],
+  );
+
+  const removeFolder = useCallback(async (folder: Folder) => {
+    // A folder takes everything inside it - subfolders, hosts, their saved
+    // passwords - so this is a heavier confirm than a single host.
+    if (
+      !window.confirm(
+        `Delete the folder "${folder.name}" and everything inside it? Saved passwords go too.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await deleteFolder(folder.id);
+      useVault.getState().select(null);
+    } catch (err) {
+      setBanner(`Could not delete the folder: ${errorMessage(err)}`);
+    }
+    await useVault.getState().refresh();
+  }, []);
+
   const splitFocused = useCallback((direction: SplitDirection) => {
     const focused = focusedPane(useSessions.getState());
     if (!focused) {
@@ -552,6 +602,23 @@ export default function App() {
               </button>
               <button
                 type="button"
+                title="New folder"
+                aria-label="New folder"
+                className="rounded px-2 py-0.5 hover:bg-[var(--hb-hover)]"
+                onClick={() =>
+                  // Under the selected folder when there is one, otherwise at
+                  // the top level.
+                  setModal({
+                    kind: "folder",
+                    folder: null,
+                    parentId: selected?.kind === "folder" ? selected.id : null,
+                  })
+                }
+              >
+                &#128193;
+              </button>
+              <button
+                type="button"
                 title="Edit host"
                 aria-label="Edit host"
                 disabled={selected?.kind !== "host"}
@@ -581,6 +648,17 @@ export default function App() {
               onDuplicate={(host) => void duplicateHost(host)}
               onDelete={(host) => void removeHost(host)}
               onForgetSecrets={(host) => void forgetHostSecrets(host)}
+              onNewHost={(folder) => {
+                useVault.getState().select({ kind: "folder", id: folder.id });
+                setModal({ kind: "host", host: null });
+              }}
+              onNewSubfolder={(folder) =>
+                setModal({ kind: "folder", folder: null, parentId: folder.id })
+              }
+              onRenameFolder={(folder) =>
+                setModal({ kind: "folder", folder, parentId: folder.parentId })
+              }
+              onDeleteFolder={(folder) => void removeFolder(folder)}
             />
 
             <div className="flex flex-col gap-1 border-t border-[var(--hb-border)] p-1 text-xs">
@@ -699,6 +777,15 @@ export default function App() {
                     }
                   : undefined
               }
+            />
+          )}
+
+          {modal.kind === "folder" && (
+            <FolderDialog
+              mode={modal.folder ? "rename" : "create"}
+              initialName={modal.folder?.name ?? ""}
+              onSave={(name) => void saveFolder(name)}
+              onCancel={() => setModal({ kind: "none" })}
             />
           )}
 
