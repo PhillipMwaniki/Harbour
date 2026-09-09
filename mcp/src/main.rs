@@ -4,7 +4,7 @@
 //! it, dispatch it, and write the reply (if any) as one line. Logging goes to
 //! stderr so it never corrupts the protocol stream on stdout.
 
-use harbour_mcp::{open_vault, Incoming, Server};
+use harbour_mcp::{open_core, Incoming, Server};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[tokio::main]
@@ -18,8 +18,13 @@ async fn main() -> std::io::Result<()> {
         )
         .init();
 
-    let server = Server::new(open_vault());
-    tracing::info!("harbour mcp server ready on stdio");
+    // Command execution is opt-in: an agent gets the read-only inventory unless
+    // the launcher passed --allow-write (or set HARBOUR_MCP_ALLOW_WRITE=1).
+    let allow_write = std::env::args().any(|arg| arg == "--allow-write")
+        || std::env::var_os("HARBOUR_MCP_ALLOW_WRITE").is_some_and(|value| value == "1");
+
+    let server = Server::with_core(open_core(), allow_write);
+    tracing::info!(allow_write, "harbour mcp server ready on stdio");
 
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
