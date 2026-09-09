@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 
 import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { buildTree, type TreeNode } from "@/ipc/vault";
-import type { Host } from "@/ipc/types";
+import type { Folder, Host } from "@/ipc/types";
 import { writeClipboard } from "@/lib/clipboard";
 import { useVault } from "@/stores/vault";
 
@@ -17,12 +17,20 @@ export interface HostActions {
   onForgetSecrets: (host: Host) => void;
 }
 
-/** Where a context menu is open, and for which host. */
-interface MenuState {
-  host: Host;
-  x: number;
-  y: number;
+/** The actions a folder row offers from its menu. */
+export interface FolderActions {
+  onNewHost: (folder: Folder) => void;
+  onNewSubfolder: (folder: Folder) => void;
+  onRenameFolder: (folder: Folder) => void;
+  onDeleteFolder: (folder: Folder) => void;
 }
+
+export type SessionTreeActions = HostActions & FolderActions;
+
+/** Which row's right-click menu is open, and where. */
+type MenuState =
+  | { kind: "host"; host: Host; x: number; y: number }
+  | { kind: "folder"; folder: Folder; x: number; y: number };
 
 /** `user@host`, or `user@host:port` when the port is not the default. */
 function hostAddress(host: Host): string {
@@ -39,7 +47,7 @@ function hostAddress(host: Host): string {
  * a view of the tree rather than a second place that knows how to change it.
  * The one thing it owns is which row's right-click menu is open.
  */
-export function SessionTree(actions: HostActions) {
+export function SessionTree(actions: SessionTreeActions) {
   const tree = useVault((state) => state.tree);
   const expanded = useVault((state) => state.expanded);
   const selected = useVault((state) => state.selected);
@@ -48,24 +56,42 @@ export function SessionTree(actions: HostActions) {
   const { roots, hosts } = useMemo(() => buildTree(tree), [tree]);
   const empty = roots.length === 0 && hosts.length === 0;
 
-  const openMenu = (host: Host, x: number, y: number) => {
+  const openHostMenu = (host: Host, x: number, y: number) => {
     useVault.getState().select({ kind: "host", id: host.id });
-    setMenu({ host, x, y });
+    setMenu({ kind: "host", host, x, y });
   };
 
-  const menuItems = (host: Host): MenuItem[] => [
-    { label: "Connect", onSelect: () => actions.onConnect(host) },
-    { label: "Edit…", onSelect: () => actions.onEdit(host) },
-    { label: "Duplicate", onSelect: () => actions.onDuplicate(host) },
-    { label: "Copy address", onSelect: () => void writeClipboard(hostAddress(host)) },
-    {
-      label: "Forget saved password",
-      onSelect: () => actions.onForgetSecrets(host),
-      disabled: !host.hasSavedPassword,
-      separatorBefore: true,
-    },
-    { label: "Delete", onSelect: () => actions.onDelete(host), danger: true },
-  ];
+  const openFolderMenu = (folder: Folder, x: number, y: number) => {
+    useVault.getState().select({ kind: "folder", id: folder.id });
+    setMenu({ kind: "folder", folder, x, y });
+  };
+
+  const items = (state: MenuState): MenuItem[] =>
+    state.kind === "host"
+      ? [
+          { label: "Connect", onSelect: () => actions.onConnect(state.host) },
+          { label: "Edit…", onSelect: () => actions.onEdit(state.host) },
+          { label: "Duplicate", onSelect: () => actions.onDuplicate(state.host) },
+          { label: "Copy address", onSelect: () => void writeClipboard(hostAddress(state.host)) },
+          {
+            label: "Forget saved password",
+            onSelect: () => actions.onForgetSecrets(state.host),
+            disabled: !state.host.hasSavedPassword,
+            separatorBefore: true,
+          },
+          { label: "Delete", onSelect: () => actions.onDelete(state.host), danger: true },
+        ]
+      : [
+          { label: "New host here", onSelect: () => actions.onNewHost(state.folder) },
+          { label: "New subfolder", onSelect: () => actions.onNewSubfolder(state.folder) },
+          { label: "Rename…", onSelect: () => actions.onRenameFolder(state.folder) },
+          {
+            label: "Delete folder",
+            onSelect: () => actions.onDeleteFolder(state.folder),
+            danger: true,
+            separatorBefore: true,
+          },
+        ];
 
   return (
     <div
@@ -88,7 +114,8 @@ export function SessionTree(actions: HostActions) {
           selectedId={selected?.id ?? null}
           onConnect={actions.onConnect}
           onEdit={actions.onEdit}
-          onContextMenu={openMenu}
+          onHostMenu={openHostMenu}
+          onFolderMenu={openFolderMenu}
         />
       ))}
 
@@ -100,17 +127,12 @@ export function SessionTree(actions: HostActions) {
           selected={selected?.kind === "host" && selected.id === host.id}
           onConnect={actions.onConnect}
           onEdit={actions.onEdit}
-          onContextMenu={openMenu}
+          onContextMenu={openHostMenu}
         />
       ))}
 
       {menu && (
-        <ContextMenu
-          x={menu.x}
-          y={menu.y}
-          items={menuItems(menu.host)}
-          onClose={() => setMenu(null)}
-        />
+        <ContextMenu x={menu.x} y={menu.y} items={items(menu)} onClose={() => setMenu(null)} />
       )}
     </div>
   );
@@ -123,7 +145,8 @@ interface FolderProps {
   selectedId: string | null;
   onConnect: (host: Host) => void;
   onEdit: (host: Host) => void;
-  onContextMenu: (host: Host, x: number, y: number) => void;
+  onHostMenu: (host: Host, x: number, y: number) => void;
+  onFolderMenu: (folder: Folder, x: number, y: number) => void;
 }
 
 function FolderRow({
@@ -133,7 +156,8 @@ function FolderRow({
   selectedId,
   onConnect,
   onEdit,
-  onContextMenu,
+  onHostMenu,
+  onFolderMenu,
 }: FolderProps) {
   const open = expanded.has(node.folder.id);
   const count = node.hosts.length + node.folders.length;
@@ -148,6 +172,10 @@ function FolderRow({
         onClick={() => {
           useVault.getState().select({ kind: "folder", id: node.folder.id });
           useVault.getState().toggle(node.folder.id);
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onFolderMenu(node.folder, event.clientX, event.clientY);
         }}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
@@ -179,7 +207,8 @@ function FolderRow({
               selectedId={selectedId}
               onConnect={onConnect}
               onEdit={onEdit}
-              onContextMenu={onContextMenu}
+              onHostMenu={onHostMenu}
+              onFolderMenu={onFolderMenu}
             />
           ))}
           {node.hosts.map((host) => (
@@ -190,7 +219,7 @@ function FolderRow({
               selected={selectedId === host.id}
               onConnect={onConnect}
               onEdit={onEdit}
-              onContextMenu={onContextMenu}
+              onContextMenu={onHostMenu}
             />
           ))}
         </>
