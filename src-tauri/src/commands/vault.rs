@@ -463,22 +463,7 @@ pub(crate) fn resolve_chain(
     vault: &crate::vault::store::Vault,
     host_id: &str,
 ) -> AppResult<Vec<Host>> {
-    let mut chain = vec![vault.host(host_id)?];
-    let mut seen = std::collections::HashSet::from([host_id.to_string()]);
-    while let Some(jump) = chain.last().and_then(|host| host.jump_host_id.clone()) {
-        if !seen.insert(jump.clone()) {
-            tracing::warn!(host = %host_id, "jump chain loops; stopping");
-            break;
-        }
-        if chain.len() >= 16 {
-            break;
-        }
-        match vault.host(&jump) {
-            Ok(host) => chain.push(host),
-            Err(_) => break,
-        }
-    }
-    Ok(chain)
+    vault.resolve_chain(host_id)
 }
 
 /// Resolves a saved host into the endpoints a connection needs: the

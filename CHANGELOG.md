@@ -9,9 +9,12 @@ All notable changes to Harbour are recorded here. The format follows
 
 - **MCP server (preview).** A new `harbour-mcp` binary exposes Harbour's saved
   hosts to AI agents over the Model Context Protocol, reusing the same vault as
-  the app with no GUI. This first cut speaks MCP over stdio and offers read-only
-  inventory tools (`harbour_list_hosts`, `harbour_list_folders`); command
-  execution, SFTP, and forwards follow. See `docs/proposals/harbour-mcp.md`.
+  the app with no GUI. It speaks MCP over stdio and offers read-only inventory
+  (`harbour_list_hosts`, `harbour_list_folders`) plus, behind an `--allow-write`
+  opt-in, command execution on a host and across a fleet (`harbour_run_command`,
+  `harbour_run_fleet`) - non-interactive, keychain-only, refusing unknown host
+  keys and guarded hosts, exactly like the fleet runner. SFTP and forwards
+  follow. See `docs/mcp.md`.
 - **Remote port forwarding (`ssh -R`).** The third forward direction: the
   server listens on a port and each connection it accepts is delivered to a
   target this machine can reach, over the session's existing connection. Choose

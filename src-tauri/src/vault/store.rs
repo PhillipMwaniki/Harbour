@@ -100,6 +100,32 @@ impl Vault {
             .ok_or_else(|| AppError::HostNotFound(id.to_string()))
     }
 
+    /// The chain a host sits behind, destination first: it, then the hosts its
+    /// `jump_host_id` points through, hop by hop.
+    ///
+    /// A jump that has been deleted, or a loop, ends the chain rather than
+    /// failing: a bastion that is gone leaves its dependents merely direct,
+    /// which is the safe direction to err. The depth is bounded so a corrupt
+    /// pointer chain cannot spin.
+    pub fn resolve_chain(&self, host_id: &str) -> AppResult<Vec<Host>> {
+        let mut chain = vec![self.host(host_id)?];
+        let mut seen = std::collections::HashSet::from([host_id.to_string()]);
+        while let Some(jump) = chain.last().and_then(|host| host.jump_host_id.clone()) {
+            if !seen.insert(jump.clone()) {
+                tracing::warn!(host = %host_id, "jump chain loops; stopping");
+                break;
+            }
+            if chain.len() >= 16 {
+                break;
+            }
+            match self.host(&jump) {
+                Ok(host) => chain.push(host),
+                Err(_) => break,
+            }
+        }
+        Ok(chain)
+    }
+
     // -----------------------------------------------------------------------
     // Folders
     // -----------------------------------------------------------------------
