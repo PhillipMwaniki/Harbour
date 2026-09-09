@@ -1,29 +1,71 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
+import { ContextMenu, type MenuItem } from "@/components/ContextMenu";
 import { buildTree, type TreeNode } from "@/ipc/vault";
 import type { Host } from "@/ipc/types";
+import { writeClipboard } from "@/lib/clipboard";
 import { useVault } from "@/stores/vault";
 
-interface Props {
+/** The actions a host row offers, from its toolbar buttons and its menu. */
+export interface HostActions {
   /** Double-click, or Enter, on a host. */
   onConnect: (host: Host) => void;
   onEdit: (host: Host) => void;
+  onDuplicate: (host: Host) => void;
+  onDelete: (host: Host) => void;
+  /** Drop this host's saved password from the keychain. */
+  onForgetSecrets: (host: Host) => void;
+}
+
+/** Where a context menu is open, and for which host. */
+interface MenuState {
+  host: Host;
+  x: number;
+  y: number;
+}
+
+/** `user@host`, or `user@host:port` when the port is not the default. */
+function hostAddress(host: Host): string {
+  return host.port === 22
+    ? `${host.username}@${host.hostname}`
+    : `${host.username}@${host.hostname}:${host.port}`;
 }
 
 /**
  * The session manager: folders and saved hosts, as a tree.
  *
  * Everything here reads from the vault store and writes nothing. Actions -
- * connect, edit, delete - are the parent's, so this component stays a view of
- * the tree rather than a second place that knows how to change it.
+ * connect, edit, duplicate, delete - are the parent's, so this component stays
+ * a view of the tree rather than a second place that knows how to change it.
+ * The one thing it owns is which row's right-click menu is open.
  */
-export function SessionTree({ onConnect, onEdit }: Props) {
+export function SessionTree(actions: HostActions) {
   const tree = useVault((state) => state.tree);
   const expanded = useVault((state) => state.expanded);
   const selected = useVault((state) => state.selected);
+  const [menu, setMenu] = useState<MenuState | null>(null);
 
   const { roots, hosts } = useMemo(() => buildTree(tree), [tree]);
   const empty = roots.length === 0 && hosts.length === 0;
+
+  const openMenu = (host: Host, x: number, y: number) => {
+    useVault.getState().select({ kind: "host", id: host.id });
+    setMenu({ host, x, y });
+  };
+
+  const menuItems = (host: Host): MenuItem[] => [
+    { label: "Connect", onSelect: () => actions.onConnect(host) },
+    { label: "Edit…", onSelect: () => actions.onEdit(host) },
+    { label: "Duplicate", onSelect: () => actions.onDuplicate(host) },
+    { label: "Copy address", onSelect: () => void writeClipboard(hostAddress(host)) },
+    {
+      label: "Forget saved password",
+      onSelect: () => actions.onForgetSecrets(host),
+      disabled: !host.hasSavedPassword,
+      separatorBefore: true,
+    },
+    { label: "Delete", onSelect: () => actions.onDelete(host), danger: true },
+  ];
 
   return (
     <div
@@ -44,8 +86,9 @@ export function SessionTree({ onConnect, onEdit }: Props) {
           depth={0}
           expanded={expanded}
           selectedId={selected?.id ?? null}
-          onConnect={onConnect}
-          onEdit={onEdit}
+          onConnect={actions.onConnect}
+          onEdit={actions.onEdit}
+          onContextMenu={openMenu}
         />
       ))}
 
@@ -55,10 +98,20 @@ export function SessionTree({ onConnect, onEdit }: Props) {
           host={host}
           depth={0}
           selected={selected?.kind === "host" && selected.id === host.id}
-          onConnect={onConnect}
-          onEdit={onEdit}
+          onConnect={actions.onConnect}
+          onEdit={actions.onEdit}
+          onContextMenu={openMenu}
         />
       ))}
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menu.host)}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }
@@ -70,9 +123,18 @@ interface FolderProps {
   selectedId: string | null;
   onConnect: (host: Host) => void;
   onEdit: (host: Host) => void;
+  onContextMenu: (host: Host, x: number, y: number) => void;
 }
 
-function FolderRow({ node, depth, expanded, selectedId, onConnect, onEdit }: FolderProps) {
+function FolderRow({
+  node,
+  depth,
+  expanded,
+  selectedId,
+  onConnect,
+  onEdit,
+  onContextMenu,
+}: FolderProps) {
   const open = expanded.has(node.folder.id);
   const count = node.hosts.length + node.folders.length;
 
@@ -117,6 +179,7 @@ function FolderRow({ node, depth, expanded, selectedId, onConnect, onEdit }: Fol
               selectedId={selectedId}
               onConnect={onConnect}
               onEdit={onEdit}
+              onContextMenu={onContextMenu}
             />
           ))}
           {node.hosts.map((host) => (
@@ -127,6 +190,7 @@ function FolderRow({ node, depth, expanded, selectedId, onConnect, onEdit }: Fol
               selected={selectedId === host.id}
               onConnect={onConnect}
               onEdit={onEdit}
+              onContextMenu={onContextMenu}
             />
           ))}
         </>
@@ -141,10 +205,11 @@ interface HostProps {
   selected: boolean;
   onConnect: (host: Host) => void;
   onEdit: (host: Host) => void;
+  onContextMenu: (host: Host, x: number, y: number) => void;
 }
 
-function HostRow({ host, depth, selected, onConnect, onEdit }: HostProps) {
-  const label = host.port === 22 ? `${host.username}@${host.hostname}` : `${host.username}@${host.hostname}:${host.port}`;
+function HostRow({ host, depth, selected, onConnect, onEdit, onContextMenu }: HostProps) {
+  const label = hostAddress(host);
 
   return (
     <div
@@ -154,6 +219,12 @@ function HostRow({ host, depth, selected, onConnect, onEdit }: HostProps) {
       title={host.description ? `${label} - ${host.description}` : label}
       onClick={() => useVault.getState().select({ kind: "host", id: host.id })}
       onDoubleClick={() => onConnect(host)}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        // Fires for the mouse and for the keyboard menu key alike; the key
+        // reports the row's own position, which is where the menu belongs.
+        onContextMenu(host, event.clientX, event.clientY);
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter") {
           event.preventDefault();

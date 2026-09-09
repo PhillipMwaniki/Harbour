@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Folder, Host, VaultTree } from "./types";
-import { buildTree, subtreeSize } from "./vault";
+import { buildTree, copyName, hostToInput, subtreeSize } from "./vault";
 
 function folder(id: string, parentId: string | null = null, position = 0): Folder {
   return { id, parentId, name: id, position };
@@ -103,5 +103,46 @@ describe("subtreeSize", () => {
   it("counts an empty folder as itself and nothing else", () => {
     const built = buildTree(tree([folder("empty")], []));
     expect(subtreeSize(built.roots[0])).toEqual({ folders: 1, hosts: 0 });
+  });
+});
+
+describe("hostToInput", () => {
+  it("carries the editable fields and drops the store-owned ones", () => {
+    const source = { ...host("web", "prod"), hasSavedPassword: true, position: 4 };
+    const input = hostToInput(source);
+
+    expect(input).toEqual({
+      folderId: "prod",
+      name: "web",
+      hostname: "web.example.com",
+      port: 22,
+      username: "deploy",
+      description: null,
+      auth: { useAgent: true, keyPath: null, usePassword: true },
+      jumpHostId: null,
+      guarded: false,
+    });
+    // No id, position, or saved-password flag: those are the store's to assign.
+    expect("id" in input).toBe(false);
+    expect("hasSavedPassword" in input).toBe(false);
+  });
+
+  it("copies the auth object rather than sharing it", () => {
+    const source = host("web");
+    const input = hostToInput(source);
+    input.auth.useAgent = false;
+    expect(source.auth.useAgent).toBe(true);
+  });
+});
+
+describe("copyName", () => {
+  it("appends copy, then numbers to dodge collisions", () => {
+    expect(copyName("web", [])).toBe("web copy");
+    expect(copyName("web", ["web copy"])).toBe("web copy 2");
+    expect(copyName("web", ["web copy", "web copy 2"])).toBe("web copy 3");
+  });
+
+  it("is unaffected by unrelated names", () => {
+    expect(copyName("web", ["db", "cache"])).toBe("web copy");
   });
 });

@@ -24,9 +24,11 @@ import { connectionRespond, onHostKeyPrompt, onSecretPrompt } from "@/ipc/ssh";
 import { onForwardUpdate } from "@/ipc/forward";
 import { onEditUpdate, onTransferUpdate } from "@/ipc/transfer";
 import {
+  copyName,
   createHost,
   deleteHost,
   forgetSecrets,
+  hostToInput,
   keychainAvailable,
   secretStoreStatus,
   updateHost,
@@ -57,7 +59,7 @@ import { useTransfers } from "@/stores/transfers";
 import { useBroadcast } from "@/stores/broadcast";
 import { activePane, focusedPane, paneForSession, useSessions, type Pane } from "@/stores/sessions";
 import { applyThemeVariables, useSettings, useTerminalTheme } from "@/stores/settings";
-import { selectedHost, useVault } from "@/stores/vault";
+import { revealFolder, selectedHost, useVault } from "@/stores/vault";
 
 /** Which modal, if any, is up. Only one is ever open at a time. */
 type Modal =
@@ -316,9 +318,7 @@ export default function App() {
     [modal],
   );
 
-  const removeSelectedHost = useCallback(async () => {
-    const host = selectedHost(useVault.getState());
-    if (!host) return;
+  const removeHost = useCallback(async (host: Host) => {
     // Deleting a host takes its saved password with it, which is not something
     // to do on a stray keypress.
     if (!window.confirm(`Delete ${host.name}? Any saved password goes too.`)) return;
@@ -328,6 +328,36 @@ export default function App() {
       useVault.getState().select(null);
     } catch (err) {
       setBanner(`Could not delete the host: ${errorMessage(err)}`);
+    }
+    await useVault.getState().refresh();
+  }, []);
+
+  const removeSelectedHost = useCallback(() => {
+    const host = selectedHost(useVault.getState());
+    if (host) void removeHost(host);
+  }, [removeHost]);
+
+  // Duplicate a host: a fresh host with the same settings under a "copy" name,
+  // dropped in the same folder. The saved password is deliberately not carried
+  // over - a copy starts without a secret rather than fanning one out silently.
+  const duplicateHost = useCallback(async (host: Host) => {
+    try {
+      const names = useVault.getState().tree.hosts.map((entry) => entry.name);
+      const input = { ...hostToInput(host), name: copyName(host.name, names) };
+      const created = await createHost(input);
+      await useVault.getState().refresh();
+      if (created.folderId) revealFolder(useVault.getState().tree, created.folderId);
+      useVault.getState().select({ kind: "host", id: created.id });
+    } catch (err) {
+      setBanner(`Could not duplicate the host: ${errorMessage(err)}`);
+    }
+  }, []);
+
+  const forgetHostSecrets = useCallback(async (host: Host) => {
+    try {
+      await forgetSecrets(host.id);
+    } catch (err) {
+      setBanner(`Could not forget the saved password: ${errorMessage(err)}`);
     }
     await useVault.getState().refresh();
   }, []);
@@ -539,7 +569,7 @@ export default function App() {
                 aria-label="Delete host"
                 disabled={selected?.kind !== "host"}
                 className="rounded px-2 py-0.5 hover:bg-[var(--hb-hover)] disabled:opacity-40"
-                onClick={() => void removeSelectedHost()}
+                onClick={removeSelectedHost}
               >
                 &minus;
               </button>
@@ -548,6 +578,9 @@ export default function App() {
             <SessionTree
               onConnect={connectHost}
               onEdit={(host) => setModal({ kind: "host", host })}
+              onDuplicate={(host) => void duplicateHost(host)}
+              onDelete={(host) => void removeHost(host)}
+              onForgetSecrets={(host) => void forgetHostSecrets(host)}
             />
 
             <div className="flex flex-col gap-1 border-t border-[var(--hb-border)] p-1 text-xs">
