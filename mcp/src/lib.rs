@@ -9,14 +9,16 @@
 //! bounded by what the person who launched the server already has: their saved
 //! hosts, their keychain, their `known_hosts`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use harbour_lib::error::AppResult;
 use harbour_lib::ssh::client::{self, Endpoint};
+use harbour_lib::ssh::forward::{ForwardSpec, Forwards, RemoteSpec};
 use harbour_lib::ssh::known_hosts::KnownHosts;
 use harbour_lib::ssh::sftp::{self, SftpSession};
 use harbour_lib::ssh::transport::SshTransport;
@@ -106,9 +108,16 @@ pub struct Server {
     vault: Arc<Vault>,
     known_hosts: Arc<KnownHosts>,
     secrets: Arc<SecretStore>,
-    /// Whether tools that act - run commands, and later write files and open
-    /// forwards - are offered. Off by default: an agent can see the estate but
-    /// not touch it until the server is started with `--allow-write`.
+    /// The port forwards the server is holding open, and the connection behind
+    /// each. A forward lives until it is closed: the engine runs its accept
+    /// loop, and the transport in [`Server::connections`] keeps the connection.
+    forwards: Arc<Forwards>,
+    /// The connection keeping each open forward alive, by forward id. Dropping
+    /// one closes its connection, so a closed forward's entry is removed.
+    connections: Arc<Mutex<HashMap<String, SshTransport>>>,
+    /// Whether tools that act - run commands, write files, open forwards - are
+    /// offered. Off by default: an agent can see the estate but not touch it
+    /// until the server is started with `--allow-write`.
     allow_write: bool,
 }
 
@@ -122,6 +131,8 @@ impl Server {
             vault,
             known_hosts: Arc::new(KnownHosts::new(config_dir().join("known_hosts"))),
             secrets: Arc::new(SecretStore::file_backed(config_dir().join("secrets.vault"))),
+            forwards: Forwards::new(Arc::new(|_| {})),
+            connections: Arc::new(Mutex::new(HashMap::new())),
             allow_write: false,
         }
     }
@@ -132,6 +143,10 @@ impl Server {
             vault: core.vault,
             known_hosts: core.known_hosts,
             secrets: core.secrets,
+            // The engine reports through events in the app; the MCP has no event
+            // stream, so it reads state back with forward_list instead.
+            forwards: Forwards::new(Arc::new(|_| {})),
+            connections: Arc::new(Mutex::new(HashMap::new())),
             allow_write,
         }
     }
@@ -186,6 +201,9 @@ impl Server {
             "harbour_sftp_list" => self.sftp_list(arguments).await,
             "harbour_sftp_read" => self.sftp_read(arguments).await,
             "harbour_sftp_write" => self.sftp_write(arguments).await,
+            "harbour_forward_open" => self.forward_open(arguments).await,
+            "harbour_forward_list" => self.forward_list(),
+            "harbour_forward_close" => self.forward_close(arguments),
             other => Err(format!("unknown tool `{other}`")),
         };
 
@@ -376,9 +394,10 @@ impl Server {
     /// dropping it closes the connection.
     async fn open_sftp(&self, spec: &str) -> Result<(SftpSession, SshTransport), String> {
         let Prepared { dest, jumps, .. } = self.prepare(spec).await?;
-        let transport = client::connect_headless(jumps, dest, Arc::clone(&self.known_hosts))
-            .await
-            .map_err(|err| err.to_string())?;
+        let (transport, _remote_forwards) =
+            client::connect_headless(jumps, dest, Arc::clone(&self.known_hosts))
+                .await
+                .map_err(|err| err.to_string())?;
         let sftp = sftp::open(&transport.opener())
             .await
             .map_err(|err| err.to_string())?;
@@ -477,15 +496,138 @@ impl Server {
             .map_err(|err| err.to_string())
     }
 
-    /// A cheap clone of just the references a spawned fleet task needs.
+    /// A cheap clone that shares the same state - every field is an `Arc` or a
+    /// `Copy`. For handing a spawned fleet task its own handle.
     fn clone_refs(&self) -> Self {
         Self {
             vault: Arc::clone(&self.vault),
             known_hosts: Arc::clone(&self.known_hosts),
             secrets: Arc::clone(&self.secrets),
+            forwards: Arc::clone(&self.forwards),
+            connections: Arc::clone(&self.connections),
             allow_write: self.allow_write,
         }
     }
+
+    async fn forward_open(&self, args: Value) -> Result<Value, String> {
+        if !self.allow_write {
+            return Err(WRITE_DISABLED.into());
+        }
+        let host = string_arg(&args, "host")?;
+        let kind = args.get("kind").and_then(Value::as_str).unwrap_or("local");
+        let bind_address = args
+            .get("bindAddress")
+            .and_then(Value::as_str)
+            .unwrap_or(if kind == "remote" {
+                "localhost"
+            } else {
+                "127.0.0.1"
+            })
+            .to_string();
+        // The port to listen on: local for -L/-D, the server's for -R. 0 asks
+        // for a free one, reported back in the result.
+        let listen_port = args.get("listenPort").and_then(Value::as_u64).unwrap_or(0) as u16;
+
+        let Prepared { jumps, dest, .. } = self.prepare(&host).await?;
+        let (transport, remote_forwards) =
+            client::connect_headless(jumps, dest, Arc::clone(&self.known_hosts))
+                .await
+                .map_err(|err| err.to_string())?;
+        let opener = transport.opener();
+        // Each forward gets its own connection, so its own session id.
+        let session_id = uuidish();
+
+        let info = match kind {
+            "local" => {
+                let (target_host, target_port) = target(&args)?;
+                self.forwards
+                    .open_local(
+                        session_id,
+                        opener,
+                        ForwardSpec {
+                            bind_address,
+                            local_port: listen_port,
+                            host: target_host,
+                            port: target_port,
+                        },
+                    )
+                    .await
+            }
+            "dynamic" => {
+                self.forwards
+                    .open_dynamic(session_id, opener, bind_address, listen_port)
+                    .await
+            }
+            "remote" => {
+                let (target_host, target_port) = target(&args)?;
+                self.forwards
+                    .open_remote(
+                        session_id,
+                        opener,
+                        remote_forwards,
+                        RemoteSpec {
+                            bind_address,
+                            remote_port: listen_port,
+                            host: target_host,
+                            port: target_port,
+                        },
+                    )
+                    .await
+            }
+            other => {
+                return Err(format!(
+                    "`kind` must be local, dynamic or remote, not `{other}`"
+                ))
+            }
+        };
+
+        match info {
+            Ok(info) => {
+                // Hold the connection open for the life of the forward.
+                self.connections
+                    .lock()
+                    .unwrap()
+                    .insert(info.id.clone(), transport);
+                serde_json::to_value(&info).map_err(|err| err.to_string())
+            }
+            // `transport` drops here, closing the connection the forward never
+            // got to use.
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    fn forward_list(&self) -> Result<Value, String> {
+        serde_json::to_value(self.forwards.list()).map_err(|err| err.to_string())
+    }
+
+    fn forward_close(&self, args: Value) -> Result<Value, String> {
+        let id = string_arg(&args, "id")?;
+        self.forwards.close(&id).map_err(|err| err.to_string())?;
+        // Drop the connection now the forward that rode it is gone.
+        self.connections.lock().unwrap().remove(&id);
+        Ok(json!({ "closed": id }))
+    }
+}
+
+/// The `targetHost`/`targetPort` a local or remote forward delivers to.
+fn target(args: &Value) -> Result<(String, u16), String> {
+    let host = string_arg(args, "targetHost")?;
+    let port = args
+        .get("targetPort")
+        .and_then(Value::as_u64)
+        .ok_or("`targetPort` is required")?;
+    Ok((host, port as u16))
+}
+
+/// A random-enough id for a per-forward session. Avoids a uuid dependency: the
+/// id only has to be unique among this process's live forwards.
+fn uuidish() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("mcp-fwd-{nanos}")
 }
 
 /// The message a write tool gives when the server was not started to allow it.
@@ -647,6 +789,38 @@ fn tool_specs(allow_write: bool) -> Vec<Value> {
                     "base64": { "type": "boolean", "description": "Whether content is base64-encoded binary. Default false." },
                 },
                 "required": ["host", "path", "content"],
+                "additionalProperties": false,
+            },
+        }));
+        tools.push(json!({
+            "name": "harbour_forward_open",
+            "description": "Open a port forward over a saved host's connection, held until closed. kind 'local' (-L) listens locally and delivers to targetHost:targetPort reached from the host; 'dynamic' (-D) is a local SOCKS5 proxy; 'remote' (-R) asks the host to listen and delivers to targetHost:targetPort reached from this machine. Returns the forward, including the bound port when listenPort was 0.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "host": { "type": "string", "description": "A saved host's id or unique name." },
+                    "kind": { "type": "string", "enum": ["local", "dynamic", "remote"], "description": "Default local." },
+                    "bindAddress": { "type": "string", "description": "Where to listen. Default 127.0.0.1 (localhost for remote)." },
+                    "listenPort": { "type": "integer", "description": "The port to listen on; 0 (default) picks a free one, reported back." },
+                    "targetHost": { "type": "string", "description": "The delivery host, for local and remote forwards." },
+                    "targetPort": { "type": "integer", "description": "The delivery port, for local and remote forwards." },
+                },
+                "required": ["host"],
+                "additionalProperties": false,
+            },
+        }));
+        tools.push(json!({
+            "name": "harbour_forward_list",
+            "description": "List the port forwards the server is currently holding open, with their bound ports and connection counts.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+        }));
+        tools.push(json!({
+            "name": "harbour_forward_close",
+            "description": "Close a port forward by its id, releasing the connection behind it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"],
                 "additionalProperties": false,
             },
         }));
@@ -973,6 +1147,78 @@ mod tests {
         let parsed: Value =
             serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert!(parsed["error"].as_str().unwrap().contains("`path`"));
+    }
+
+    #[tokio::test]
+    async fn forward_tools_appear_only_with_allow_write() {
+        let writable = writable_server(Vault::in_memory().unwrap());
+        let list = writable
+            .handle(incoming("tools/list", Some(json!(1)), Value::Null))
+            .await
+            .unwrap();
+        let names: Vec<String> = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect();
+        for tool in [
+            "harbour_forward_open",
+            "harbour_forward_list",
+            "harbour_forward_close",
+        ] {
+            assert!(names.iter().any(|n| n == tool), "missing {tool}");
+        }
+
+        let read_only = server_with_a_host();
+        let reply = call(
+            &read_only,
+            "harbour_forward_open",
+            json!({ "host": "web", "kind": "dynamic" }),
+        )
+        .await;
+        assert_eq!(reply["result"]["isError"], true);
+        assert!(reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-write"));
+    }
+
+    #[tokio::test]
+    async fn forward_open_refuses_a_guarded_host_before_connecting() {
+        let vault = Vault::in_memory().unwrap();
+        vault
+            .create_host(HostInput {
+                guarded: true,
+                ..host_input("prod")
+            })
+            .unwrap();
+        let server = writable_server(vault);
+
+        let reply = call(
+            &server,
+            "harbour_forward_open",
+            json!({ "host": "prod", "kind": "dynamic", "listenPort": 0 }),
+        )
+        .await;
+        assert_eq!(reply["result"]["isError"], true);
+        let parsed: Value =
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(parsed["error"].as_str().unwrap().contains("guarded"));
+    }
+
+    #[tokio::test]
+    async fn forward_list_starts_empty_and_close_reports_an_unknown_id() {
+        let server = writable_server(Vault::in_memory().unwrap());
+
+        let list = call(&server, "harbour_forward_list", json!({})).await;
+        assert_eq!(list["result"]["isError"], false);
+        let parsed: Value =
+            serde_json::from_str(list["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 0);
+
+        let closed = call(&server, "harbour_forward_close", json!({ "id": "nope" })).await;
+        assert_eq!(closed["result"]["isError"], true);
     }
 
     #[tokio::test]
