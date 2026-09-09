@@ -364,6 +364,7 @@ hand a key back to the terminal.
 | --- | --- |
 | `Ctrl+Shift+T` | New terminal (default shell) |
 | `Ctrl+Shift+N` | New SSH connection |
+| `Ctrl+Shift+C` | Copy the selection (Ctrl+C stays the interrupt) |
 | `Ctrl+Shift+K` | Clear the terminal |
 | `Ctrl+Shift+D` / `Ctrl+Shift+B` | Split right / down |
 | `Ctrl+Shift+W` | Close the pane |

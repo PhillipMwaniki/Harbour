@@ -13,6 +13,12 @@ All notable changes to Harbour are recorded here. The format follows
   Remote (-R) in the port-forward panel. Completes the forwarding trilogy
   alongside local (-L) and dynamic SOCKS (-D).
 
+### Fixed
+
+- **Copy from the terminal.** `Ctrl+Shift+C` now copies the selection (it was
+  listed as a copy shortcut but never wired up). `Ctrl+C` stays the shell's
+  interrupt, and the binding is rebindable in Settings like any other.
+
 ## [0.4.0] - 2026-09-05
 
 Beyond the MVP: new session kinds, automation across an estate, and features
