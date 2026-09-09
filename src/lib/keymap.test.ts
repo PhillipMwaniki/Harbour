@@ -62,6 +62,7 @@ describe("bindings", () => {
 
     expect(actionFor(bindings, "Ctrl+Shift+T")).toBe("terminal.new");
     expect(actionFor(bindings, "Ctrl+Shift+D")).toBe("pane.splitRight");
+    expect(actionFor(bindings, "Ctrl+Shift+R")).toBe("pane.reconnect");
     // Copy is Ctrl+Shift+C so a bare Ctrl+C stays the shell's interrupt.
     expect(actionFor(bindings, "Ctrl+Shift+C")).toBe("terminal.copy");
     expect(actionFor(bindings, "Ctrl+C")).toBeNull();

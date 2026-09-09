@@ -55,6 +55,12 @@ export interface Pane {
   log: LogStatus | null;
   /** The shell's working directory, when it reports one via OSC 7. */
   cwd: string | null;
+  /**
+   * Bumped to reconnect a pane whose session was lost. The terminal is keyed on
+   * it, so incrementing it remounts a fresh terminal that opens a new session
+   * for the same target - which is what "reconnect" is.
+   */
+  generation: number;
 }
 
 /**
@@ -105,6 +111,12 @@ export interface SessionsState {
    * session did not end on purpose, so the pane can say why it is dead.
    */
   markSessionClosed: (sessionId: string, exitCode: number | null, error?: string) => void;
+  /**
+   * Reopens a closed pane's session for the same target. Resets it to
+   * `starting` and bumps `generation` so the terminal remounts and opens a
+   * fresh session. A pane that is not closed is left alone.
+   */
+  reconnectPane: (tabId: string, paneId: string) => void;
   setTitle: (tabId: string, paneId: string, title: string) => void;
   setLog: (sessionId: string, log: LogStatus | null) => void;
   /** Records the working directory a session reported. */
@@ -169,6 +181,7 @@ function newPane(target: SessionTarget, shells: ShellSpec[]): Pane {
     error: null,
     log: null,
     cwd: null,
+    generation: 0,
   };
 }
 
@@ -303,6 +316,28 @@ export const useSessions = create<SessionsState>((set, get) => ({
           error: error ?? current.error,
         }));
       }),
+    })),
+
+  reconnectPane: (tabId, paneId) =>
+    set((state) => ({
+      tabs: mapTab(state.tabs, tabId, (tab) =>
+        mapPane(tab, paneId, (pane) =>
+          pane.status !== "closed"
+            ? pane
+            : {
+                ...pane,
+                sessionId: null,
+                status: "starting",
+                exitCode: null,
+                error: null,
+                // A new session logs afresh, and its cwd is unknown until it
+                // reports one; carrying the old values over would be a lie.
+                log: null,
+                cwd: null,
+                generation: pane.generation + 1,
+              },
+        ),
+      ),
     })),
 
   setTitle: (tabId, paneId, title) =>

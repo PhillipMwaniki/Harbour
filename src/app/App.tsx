@@ -447,6 +447,11 @@ export default function App() {
         case "pane.close":
           if (focused) void closePane(focused.tab.tabId, focused.pane.paneId);
           return;
+        case "pane.reconnect":
+          // Only a closed pane reconnects; the store ignores the rest, so a
+          // stray keypress in a live terminal does nothing.
+          if (focused) sessions.reconnectPane(focused.tab.tabId, focused.pane.paneId);
+          return;
         case "pane.splitRight":
           splitFocused("row");
           return;

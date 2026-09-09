@@ -17,6 +17,7 @@ export type ActionId =
   | "terminal.copy"
   | "terminal.clear"
   | "pane.close"
+  | "pane.reconnect"
   | "pane.splitRight"
   | "pane.splitDown"
   | "pane.next"
@@ -69,6 +70,12 @@ export const actions: ActionSpec[] = [
     defaults: ["Ctrl+Shift+K"],
   },
   { id: "pane.close", label: "Close pane", group: "Panes", defaults: ["Ctrl+Shift+W"] },
+  {
+    id: "pane.reconnect",
+    label: "Reconnect the pane",
+    group: "Panes",
+    defaults: ["Ctrl+Shift+R"],
+  },
   { id: "pane.splitRight", label: "Split right", group: "Panes", defaults: ["Ctrl+Shift+D"] },
   { id: "pane.splitDown", label: "Split down", group: "Panes", defaults: ["Ctrl+Shift+B"] },
   { id: "pane.next", label: "Focus the next pane", group: "Panes", defaults: ["Ctrl+Shift+]"] },

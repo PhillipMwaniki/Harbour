@@ -19,6 +19,10 @@ All notable changes to Harbour are recorded here. The format follows
 - **Folder management.** Right-click a folder for New host here, New subfolder,
   Rename, and Delete, and a New folder button in the sidebar - so the folder
   tree can be built and reorganised in the app rather than only through imports.
+- **Reconnect a dropped pane.** When a connection is lost the pane no longer
+  just freezes: a bar offers to reconnect it, reopening the same target in a
+  fresh terminal, and `Ctrl+Shift+R` does the same from the keyboard. The dead
+  output stays readable underneath until you do.
 
 ### Fixed
 

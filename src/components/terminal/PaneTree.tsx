@@ -1,9 +1,41 @@
 import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
 
 import { clampRatio, type Layout } from "@/lib/panes";
-import { useSessions, type TerminalTab } from "@/stores/sessions";
+import { useSessions, type Pane, type TerminalTab } from "@/stores/sessions";
 import { paneHandle } from "./registry";
 import { TerminalView } from "./TerminalView";
+
+/** What the reconnect bar says about why the pane is dead. */
+function closedMessage(pane: Pane): string {
+  if (pane.error) return pane.error;
+  if (pane.exitCode !== null && pane.exitCode !== 0) return `Exited with code ${pane.exitCode}`;
+  return "Session ended";
+}
+
+/**
+ * The strip across a dead pane offering to reopen it.
+ *
+ * It sits at the top and leaves the terminal below it interactive, so the
+ * output that was on screen when the connection dropped can still be read and
+ * scrolled - the point of keeping a lost pane rather than closing it.
+ */
+function ReconnectBar({ message, onReconnect }: { message: string; onReconnect: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="absolute inset-x-0 top-0 z-10 flex items-center gap-2 border-b border-[var(--hb-border)] bg-[var(--hb-panel)] px-3 py-1 text-xs"
+    >
+      <span className="min-w-0 flex-1 truncate text-[var(--hb-danger)]">{message}</span>
+      <button
+        type="button"
+        onClick={onReconnect}
+        className="shrink-0 rounded bg-[var(--hb-accent)] px-2 py-0.5 text-[var(--hb-bg)]"
+      >
+        Reconnect
+      </button>
+    </div>
+  );
+}
 
 interface Props {
   tab: TerminalTab;
@@ -34,6 +66,9 @@ function Node({ tab, node, visible }: { tab: TerminalTab; node: Layout; visible:
         style={split && focused ? { outlineColor: "var(--hb-accent)" } : undefined}
       >
         <TerminalView
+          // Keyed on the reconnect generation: bumping it remounts the terminal
+          // and opens a fresh session for the same target.
+          key={pane.generation}
           tabId={tab.tabId}
           paneId={pane.paneId}
           target={pane.target}
@@ -41,6 +76,12 @@ function Node({ tab, node, visible }: { tab: TerminalTab; node: Layout; visible:
           focused={focused}
           onFocus={() => useSessions.getState().setActivePane(tab.tabId, pane.paneId)}
         />
+        {pane.status === "closed" && (
+          <ReconnectBar
+            message={closedMessage(pane)}
+            onReconnect={() => useSessions.getState().reconnectPane(tab.tabId, pane.paneId)}
+          />
+        )}
         {pane.log?.active && (
           <span
             title={`Logging to ${pane.log.path}`}
