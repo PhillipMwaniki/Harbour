@@ -295,6 +295,37 @@ describe("sessions", () => {
     expect(activePane(firstTab()).title).toBe("~/code/harbour");
   });
 
+  it("reopens a closed pane, clearing its session and bumping the generation", () => {
+    const a = state().openTab();
+    state().attachSession(a.tabId, a.paneId, info("s1"));
+    state().markSessionClosed("s1", null, "the connection was lost");
+    expect(activePane(firstTab()).generation).toBe(0);
+
+    state().reconnectPane(a.tabId, a.paneId);
+
+    const pane = activePane(firstTab());
+    expect(pane.status).toBe("starting");
+    expect(pane.sessionId).toBeNull();
+    expect(pane.error).toBeNull();
+    expect(pane.exitCode).toBeNull();
+    // The terminal is keyed on this, so the bump is what forces the remount.
+    expect(pane.generation).toBe(1);
+    // The target is kept - reconnect opens the same thing again.
+    expect(pane.target).toEqual({ kind: "local" });
+  });
+
+  it("does not reconnect a pane that is still live", () => {
+    const a = state().openTab();
+    state().attachSession(a.tabId, a.paneId, info("s1"));
+
+    state().reconnectPane(a.tabId, a.paneId);
+
+    const pane = activePane(firstTab());
+    expect(pane.status).toBe("live");
+    expect(pane.sessionId).toBe("s1");
+    expect(pane.generation).toBe(0);
+  });
+
   it("tracks the log a session is writing", () => {
     const a = state().openTab();
     state().attachSession(a.tabId, a.paneId, info("s1"));
@@ -330,6 +361,7 @@ describe("lookup helpers", () => {
           error: null,
           log: null,
           cwd: null,
+          generation: 0,
         },
       },
     }));

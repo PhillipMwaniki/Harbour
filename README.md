@@ -374,6 +374,7 @@ hand a key back to the terminal.
 | `Ctrl+Shift+K` | Clear the terminal |
 | `Ctrl+Shift+D` / `Ctrl+Shift+B` | Split right / down |
 | `Ctrl+Shift+W` | Close the pane |
+| `Ctrl+Shift+R` | Reconnect a pane whose connection dropped |
 | `Ctrl+Shift+[` / `Ctrl+Shift+]` | Previous / next pane |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+Shift+E` | Show or hide the session manager |
