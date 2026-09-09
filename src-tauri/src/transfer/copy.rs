@@ -76,7 +76,7 @@ pub async fn plan(
         Direction::Upload => {
             let source = source.to_string();
             let destination = destination.to_string();
-            tauri::async_runtime::spawn_blocking(move || plan_upload(&source, &destination))
+            tokio::task::spawn_blocking(move || plan_upload(&source, &destination))
                 .await
                 .map_err(|err| AppError::Transfer(format!("planning failed: {err}")))?
         }

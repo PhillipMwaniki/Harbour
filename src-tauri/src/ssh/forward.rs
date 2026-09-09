@@ -128,7 +128,7 @@ struct Forward {
 /// the server plus a route in the connection's table.
 enum Teardown {
     /// Aborting the accept loop drops the local listener.
-    Accept(tauri::async_runtime::JoinHandle<()>),
+    Accept(tokio::task::JoinHandle<()>),
     /// Forget the route, then ask the server to stop listening.
     Remote {
         opener: ChannelOpener,
@@ -188,7 +188,7 @@ impl Forwards {
         let accept_id = id.clone();
         let accept_conns = Arc::clone(&connections);
         let target = Target::Fixed(spec.host.clone(), spec.port);
-        let task = tauri::async_runtime::spawn(async move {
+        let task = tokio::task::spawn(async move {
             engine
                 .accept_loop(accept_id, listener, opener, target, accept_conns)
                 .await;
@@ -245,7 +245,7 @@ impl Forwards {
         let engine = Arc::clone(self);
         let accept_id = id.clone();
         let accept_conns = Arc::clone(&connections);
-        let task = tauri::async_runtime::spawn(async move {
+        let task = tokio::task::spawn(async move {
             engine
                 .accept_loop(accept_id, listener, opener, Target::Socks, accept_conns)
                 .await;
@@ -396,7 +396,7 @@ impl Forwards {
             };
             let forward_id = id.clone();
             let engine = Arc::clone(&self);
-            tauri::async_runtime::spawn(async move {
+            tokio::task::spawn(async move {
                 // A dynamic forward learns the target from the SOCKS handshake;
                 // a local one already knows it.
                 let (host, port) = match fixed {
@@ -476,7 +476,7 @@ impl Forwards {
                 // Stop routing at once; then tell the server, best-effort - a
                 // connection already down never answers, and the route is gone.
                 registry.unregister(u32::from(remote_port));
-                tauri::async_runtime::spawn(async move {
+                tokio::task::spawn(async move {
                     let _ = opener
                         .cancel_remote_forward(&bind_address, remote_port)
                         .await;

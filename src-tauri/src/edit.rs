@@ -56,7 +56,7 @@ struct Edit {
     directory: PathBuf,
     /// Dropping the watcher is what stops it.
     _watcher: RecommendedWatcher,
-    task: tauri::async_runtime::JoinHandle<()>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 pub struct Editor {
@@ -148,7 +148,7 @@ impl Editor {
                 AppError::Edit(format!("could not watch {}: {err}", directory.display()))
             })?;
 
-        let task = tauri::async_runtime::spawn(Arc::clone(self).watch(
+        let task = tokio::task::spawn(Arc::clone(self).watch(
             id.clone(),
             sftp,
             local_path.clone(),

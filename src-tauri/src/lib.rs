@@ -1,3 +1,4 @@
+#[cfg(feature = "app")]
 pub mod commands;
 pub mod crypto;
 pub mod edit;
@@ -20,6 +21,7 @@ pub mod xts;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(feature = "app")]
 use tauri::{Emitter, Manager};
 
 use crate::edit::Editor;
@@ -66,6 +68,7 @@ pub struct AppState {
     pub forwards: Arc<Forwards>,
 }
 
+#[cfg(feature = "app")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -244,4 +247,5 @@ pub fn run() {
 
 /// Held in app state purely so the non-blocking log writer is flushed on
 /// shutdown; nothing ever reads it.
+#[cfg(feature = "app")]
 struct LogGuard(#[allow(dead_code)] Option<tracing_appender::non_blocking::WorkerGuard>);

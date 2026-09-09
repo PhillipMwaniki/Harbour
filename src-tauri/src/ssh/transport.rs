@@ -232,7 +232,7 @@ where
     let closing = Arc::new(AtomicBool::new(false));
     let reader_closing = Arc::clone(&closing);
 
-    tauri::async_runtime::spawn(async move {
+    tokio::task::spawn(async move {
         let mut read_half = read_half;
         let mut exit_code = None;
         let mut listening = true;
@@ -289,7 +289,7 @@ where
         on_exit(reason, exit_code);
     });
 
-    tauri::async_runtime::spawn(async move {
+    tokio::task::spawn(async move {
         // Both halves live here so the connection outlives this task by
         // exactly nothing: when the queue closes, the session goes with it.
         let session = session;

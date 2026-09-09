@@ -48,6 +48,7 @@ Other useful commands:
 pnpm test                     # frontend unit tests (vitest)
 pnpm typecheck                # tsc --noEmit
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path mcp/Cargo.toml       # the MCP server (headless, no Tauri)
 pnpm tauri:build              # installers for the current platform
 pnpm test:e2e                 # end-to-end, against the built app (see below)
 ```

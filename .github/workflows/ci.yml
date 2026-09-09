@@ -84,6 +84,39 @@ jobs:
         working-directory: src-tauri
         run: cargo test --all-features
 
+  mcp:
+    name: MCP server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The MCP crate links Harbour's core without Tauri, so it needs no webview
+      # or frontend - only what the core itself pulls in (serialport -> libudev).
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev pkg-config build-essential
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mcp
+
+      - name: Format
+        working-directory: mcp
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        working-directory: mcp
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: mcp
+        run: cargo test
+
   bundle:
     name: Bundle (${{ matrix.os }})
     needs: [frontend, rust]

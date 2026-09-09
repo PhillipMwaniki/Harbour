@@ -117,7 +117,7 @@ impl Engine {
                 .or_insert_with(|| Arc::new(Semaphore::new(PER_SESSION_CONCURRENCY))),
         );
         let engine = Arc::clone(self);
-        tauri::async_runtime::spawn(async move {
+        tokio::task::spawn(async move {
             engine.run(id, sftp, request, control, slot).await;
         });
         snapshot
