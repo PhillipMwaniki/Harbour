@@ -369,6 +369,25 @@ pub async fn run_command(
     })
 }
 
+/// Connects and authenticates through the chain but opens no shell, returning a
+/// transport that can open channels only - for SFTP or a port forward without a
+/// terminal. The headless entry point the MCP server uses.
+///
+/// The connection lives as long as the returned transport: drop it and the
+/// connection, and the jump chain behind it, close.
+pub async fn connect_headless(
+    jumps: Vec<Endpoint>,
+    dest: Endpoint,
+    known_hosts: Arc<KnownHosts>,
+) -> AppResult<SshTransport> {
+    let remote_forwards = Arc::new(RemoteForwards::default());
+    let established = establish(&jumps, &dest, &known_hosts, &remote_forwards).await?;
+    Ok(transport::start_headless(
+        established.session,
+        Box::new(established.hops),
+    ))
+}
+
 fn config() -> Config {
     Config {
         client_id: SshId::Standard(Cow::Borrowed(concat!(

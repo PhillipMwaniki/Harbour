@@ -353,3 +353,65 @@ where
         output,
     }
 }
+
+/// Starts a writer task on a connection with no shell, for opening channels
+/// only - SFTP, or a port forward, without a terminal.
+///
+/// It owns the session handle and the jump chain, so the connection lives
+/// exactly as long as the returned [`SshTransport`]: drop it and the connection
+/// (and everything riding on it) closes. There is no reader and no `on_exit`,
+/// because there is no shell whose end to report.
+pub fn start_headless<H>(
+    session: Handle<H>,
+    keep_alive: Box<dyn std::any::Any + Send>,
+) -> SshTransport
+where
+    H: Handler + 'static,
+{
+    let (commands, mut command_rx) = mpsc::unbounded_channel::<Command>();
+    let closing = Arc::new(AtomicBool::new(false));
+
+    tokio::task::spawn(async move {
+        let session = session;
+        let _keep_alive = keep_alive;
+
+        // Every command carries its own reply channel, so a failure is reported
+        // to the caller rather than ending the task; only Close stops it.
+        while let Some(command) = command_rx.recv().await {
+            match command {
+                // No shell: there is nowhere for typed input or a resize to go.
+                Command::Data(_) | Command::Resize { .. } => {}
+                Command::OpenChannel(reply) => {
+                    let _ = reply.send(session.channel_open_session().await);
+                }
+                Command::OpenForward { host, port, reply } => {
+                    let opened = session
+                        .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
+                        .await;
+                    let _ = reply.send(opened);
+                }
+                Command::RemoteForward {
+                    bind_address,
+                    port,
+                    reply,
+                } => {
+                    let _ = reply.send(session.tcpip_forward(bind_address, port).await);
+                }
+                Command::CancelRemoteForward {
+                    bind_address,
+                    port,
+                    reply,
+                } => {
+                    let _ = reply.send(session.cancel_tcpip_forward(bind_address, port).await);
+                }
+                Command::Close => break,
+            }
+        }
+
+        let _ = session
+            .disconnect(Disconnect::ByApplication, "closed by the user", "")
+            .await;
+    });
+
+    SshTransport { commands, closing }
+}

@@ -18,6 +18,8 @@ use serde_json::{json, Value};
 use harbour_lib::error::AppResult;
 use harbour_lib::ssh::client::{self, Endpoint};
 use harbour_lib::ssh::known_hosts::KnownHosts;
+use harbour_lib::ssh::sftp::{self, SftpSession};
+use harbour_lib::ssh::transport::SshTransport;
 use harbour_lib::ssh::{
     Asker, HostKeyAnswer, HostKeyQuestion, SecretAnswer, SecretKind, SecretQuestion,
 };
@@ -27,6 +29,26 @@ use harbour_lib::vault::store::Vault;
 
 /// How many hosts a fleet run connects to at once - the fleet runner's bound.
 const FLEET_CONCURRENCY: usize = 8;
+
+/// The default cap on an SFTP read, when the caller names none: enough for
+/// config and text files, not for hauling large files (the app's transfers do
+/// that). One mebibyte.
+const DEFAULT_READ_LIMIT: u64 = 1024 * 1024;
+
+/// The endpoints a connection to one host needs, plus its display name.
+struct Prepared {
+    name: String,
+    dest: Endpoint,
+    jumps: Vec<Endpoint>,
+}
+
+/// A required string argument, or a message naming what was missing.
+fn string_arg(args: &Value, key: &str) -> Result<String, String> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("`{key}` is required"))
+}
 
 /// The MCP protocol version this server implements.
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -161,6 +183,9 @@ impl Server {
             "harbour_list_folders" => self.list_folders().await,
             "harbour_run_command" => self.run_command(arguments).await,
             "harbour_run_fleet" => self.run_fleet(arguments).await,
+            "harbour_sftp_list" => self.sftp_list(arguments).await,
+            "harbour_sftp_read" => self.sftp_read(arguments).await,
+            "harbour_sftp_write" => self.sftp_write(arguments).await,
             other => Err(format!("unknown tool `{other}`")),
         };
 
@@ -290,32 +315,42 @@ impl Server {
     /// of the single-host and fleet tools. Every failure is captured in the
     /// result rather than thrown, so one bad host does not sink a fleet run.
     async fn exec(&self, spec: &str, command: &str) -> ExecResult {
-        let host = match self.resolve_host(spec).await {
-            Ok(host) => host,
+        let prepared = match self.prepare(spec).await {
+            Ok(prepared) => prepared,
             Err(err) => return ExecResult::failed(spec, err),
         };
-        // A guarded host expects a person to confirm destructive commands; there
-        // is no one to ask over MCP, so it is refused rather than run blind.
-        if host.guarded {
-            return ExecResult::failed(
-                &host.name,
-                format!(
-                    "`{}` is guarded; run commands on it from the Harbour app, where they can be confirmed",
-                    host.name
-                ),
-            );
-        }
+        let Prepared { name, dest, jumps } = prepared;
 
-        let chain = match self.resolve_chain(&host.id).await {
-            Ok(chain) => chain,
-            Err(err) => return ExecResult::failed(&host.name, err),
-        };
+        match client::run_command(jumps, dest, Arc::clone(&self.known_hosts), command).await {
+            Ok(outcome) => ExecResult {
+                name,
+                exit_code: outcome.exit_code,
+                stdout: String::from_utf8_lossy(&outcome.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&outcome.stderr).into_owned(),
+                error: None,
+            },
+            Err(err) => ExecResult::failed(&name, err.to_string()),
+        }
+    }
+
+    /// Resolves a host into the endpoints a connection needs, refusing along the
+    /// way anything an unattended run must not do: an unknown host, a guarded
+    /// one, or one with no authentication method. Shared by the command and
+    /// SFTP tools, so both reach a host under the same rules.
+    async fn prepare(&self, spec: &str) -> Result<Prepared, String> {
+        let host = self.resolve_host(spec).await?;
+        // A guarded host expects a person to confirm destructive actions; there
+        // is no one to ask over MCP, so it is refused rather than touched blind.
+        if host.guarded {
+            return Err(format!(
+                "`{}` is guarded; act on it from the Harbour app, where it can be confirmed",
+                host.name
+            ));
+        }
+        let chain = self.resolve_chain(&host.id).await?;
         for hop in &chain {
             if hop.auth.methods().is_empty() {
-                return ExecResult::failed(
-                    &host.name,
-                    format!("{} has no authentication method enabled", hop.name),
-                );
+                return Err(format!("{} has no authentication method enabled", hop.name));
             }
         }
 
@@ -329,17 +364,86 @@ impl Server {
         };
         let dest = endpoint(&chain[0]);
         let jumps: Vec<Endpoint> = chain[1..].iter().rev().map(endpoint).collect();
+        Ok(Prepared {
+            name: host.name,
+            dest,
+            jumps,
+        })
+    }
 
-        match client::run_command(jumps, dest, Arc::clone(&self.known_hosts), command).await {
-            Ok(outcome) => ExecResult {
-                name: host.name,
-                exit_code: outcome.exit_code,
-                stdout: String::from_utf8_lossy(&outcome.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&outcome.stderr).into_owned(),
-                error: None,
-            },
-            Err(err) => ExecResult::failed(&host.name, err.to_string()),
+    /// Opens SFTP on a fresh headless connection to `spec`. The returned
+    /// transport keeps the connection alive: hold it for the operation, and
+    /// dropping it closes the connection.
+    async fn open_sftp(&self, spec: &str) -> Result<(SftpSession, SshTransport), String> {
+        let Prepared { dest, jumps, .. } = self.prepare(spec).await?;
+        let transport = client::connect_headless(jumps, dest, Arc::clone(&self.known_hosts))
+            .await
+            .map_err(|err| err.to_string())?;
+        let sftp = sftp::open(&transport.opener())
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok((sftp, transport))
+    }
+
+    async fn sftp_list(&self, args: Value) -> Result<Value, String> {
+        if !self.allow_write {
+            return Err(WRITE_DISABLED.into());
         }
+        let host = string_arg(&args, "host")?;
+        let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
+        let (sftp, _keep) = self.open_sftp(&host).await?;
+        let listing = sftp::list(&sftp, path)
+            .await
+            .map_err(|err| err.to_string())?;
+        serde_json::to_value(&listing).map_err(|err| err.to_string())
+    }
+
+    async fn sftp_read(&self, args: Value) -> Result<Value, String> {
+        if !self.allow_write {
+            return Err(WRITE_DISABLED.into());
+        }
+        let host = string_arg(&args, "host")?;
+        let path = string_arg(&args, "path")?;
+        let max_bytes = args
+            .get("maxBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(DEFAULT_READ_LIMIT);
+
+        let (sftp, _keep) = self.open_sftp(&host).await?;
+        let bytes = sftp::read_file(&sftp, &path, max_bytes)
+            .await
+            .map_err(|err| err.to_string())?;
+        // Text if it is valid UTF-8; base64 otherwise, so any file round-trips.
+        Ok(match String::from_utf8(bytes) {
+            Ok(text) => json!({ "path": path, "encoding": "utf-8", "content": text }),
+            Err(err) => json!({
+                "path": path,
+                "encoding": "base64",
+                "content": data_encoding::BASE64.encode(&err.into_bytes()),
+            }),
+        })
+    }
+
+    async fn sftp_write(&self, args: Value) -> Result<Value, String> {
+        if !self.allow_write {
+            return Err(WRITE_DISABLED.into());
+        }
+        let host = string_arg(&args, "host")?;
+        let path = string_arg(&args, "path")?;
+        let content = string_arg(&args, "content")?;
+        let data = if args.get("base64").and_then(Value::as_bool).unwrap_or(false) {
+            data_encoding::BASE64
+                .decode(content.as_bytes())
+                .map_err(|err| format!("`content` is not valid base64: {err}"))?
+        } else {
+            content.into_bytes()
+        };
+
+        let (sftp, _keep) = self.open_sftp(&host).await?;
+        sftp::write_file(&sftp, &path, &data)
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(json!({ "path": path, "bytesWritten": data.len() }))
     }
 
     /// A host by id, or by name when the name is unique. Names are what a person
@@ -501,6 +605,48 @@ fn tool_specs(allow_write: bool) -> Vec<Value> {
                     "command": { "type": "string" },
                 },
                 "required": ["hosts", "command"],
+                "additionalProperties": false,
+            },
+        }));
+        tools.push(json!({
+            "name": "harbour_sftp_list",
+            "description": "List a directory on a saved host over SFTP. Same connection rules as harbour_run_command; guarded hosts are refused.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "host": { "type": "string", "description": "A saved host's id or unique name." },
+                    "path": { "type": "string", "description": "The remote directory. Defaults to the login directory." },
+                },
+                "required": ["host"],
+                "additionalProperties": false,
+            },
+        }));
+        tools.push(json!({
+            "name": "harbour_sftp_read",
+            "description": "Read a file on a saved host over SFTP. Returns text when the file is UTF-8, otherwise base64. Refuses files larger than maxBytes (default 1 MiB) - use the Harbour app to move large files.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "host": { "type": "string" },
+                    "path": { "type": "string", "description": "The remote file." },
+                    "maxBytes": { "type": "integer", "description": "Refuse a file larger than this. Default 1048576." },
+                },
+                "required": ["host", "path"],
+                "additionalProperties": false,
+            },
+        }));
+        tools.push(json!({
+            "name": "harbour_sftp_write",
+            "description": "Write a file on a saved host over SFTP, creating or truncating it. Pass base64:true to write binary content given as base64.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "host": { "type": "string" },
+                    "path": { "type": "string", "description": "The remote file." },
+                    "content": { "type": "string", "description": "The file's contents (text, or base64 when base64 is true)." },
+                    "base64": { "type": "boolean", "description": "Whether content is base64-encoded binary. Default false." },
+                },
+                "required": ["host", "path", "content"],
                 "additionalProperties": false,
             },
         }));
@@ -758,6 +904,75 @@ mod tests {
         let parsed: Value =
             serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert!(parsed["error"].as_str().unwrap().contains("no host"));
+    }
+
+    #[tokio::test]
+    async fn sftp_tools_appear_only_with_allow_write() {
+        let writable = writable_server(Vault::in_memory().unwrap());
+        let list = writable
+            .handle(incoming("tools/list", Some(json!(1)), Value::Null))
+            .await
+            .unwrap();
+        let names: Vec<String> = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect();
+        for tool in [
+            "harbour_sftp_list",
+            "harbour_sftp_read",
+            "harbour_sftp_write",
+        ] {
+            assert!(names.iter().any(|n| n == tool), "missing {tool}");
+        }
+
+        // Hidden and refused on a read-only server.
+        let read_only = server_with_a_host();
+        let reply = call(
+            &read_only,
+            "harbour_sftp_read",
+            json!({ "host": "web", "path": "/etc/hostname" }),
+        )
+        .await;
+        assert_eq!(reply["result"]["isError"], true);
+        assert!(reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-write"));
+    }
+
+    #[tokio::test]
+    async fn sftp_refuses_a_guarded_host_before_connecting() {
+        let vault = Vault::in_memory().unwrap();
+        vault
+            .create_host(HostInput {
+                guarded: true,
+                ..host_input("prod")
+            })
+            .unwrap();
+        let server = writable_server(vault);
+
+        let reply = call(
+            &server,
+            "harbour_sftp_list",
+            json!({ "host": "prod", "path": "/" }),
+        )
+        .await;
+        assert_eq!(reply["result"]["isError"], true);
+        let parsed: Value =
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(parsed["error"].as_str().unwrap().contains("guarded"));
+    }
+
+    #[tokio::test]
+    async fn sftp_write_needs_its_arguments() {
+        let server = writable_server(Vault::in_memory().unwrap());
+        let reply = call(&server, "harbour_sftp_write", json!({ "host": "x" })).await;
+        assert_eq!(reply["result"]["isError"], true);
+        let parsed: Value =
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(parsed["error"].as_str().unwrap().contains("`path`"));
     }
 
     #[tokio::test]
