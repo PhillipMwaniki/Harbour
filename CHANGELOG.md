@@ -12,6 +12,10 @@ All notable changes to Harbour are recorded here. The format follows
   target this machine can reach, over the session's existing connection. Choose
   Remote (-R) in the port-forward panel. Completes the forwarding trilogy
   alongside local (-L) and dynamic SOCKS (-D).
+- **Right-click menu on saved hosts.** A context menu in the session manager
+  with Connect, Edit, Duplicate, Copy address, Forget saved password, and
+  Delete. Duplicate makes a copy under a "… copy" name in the same folder,
+  without carrying the saved password across.
 
 ### Fixed
 

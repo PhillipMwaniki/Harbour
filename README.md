@@ -108,6 +108,10 @@ There is no login and no encryption; it is a direct byte pipe.
 The sidebar (**Ctrl+Shift+E**) is the session manager: a folder tree of saved
 hosts. Double-click one, or select it and press Enter, to connect. Each host
 records where to connect, as whom, and which authentication methods to try.
+**Right-click** a host for its actions: connect, edit, duplicate, copy the
+`user@host` address, forget its saved password, or delete it. Duplicate makes a
+copy in the same folder for a host you want to vary slightly - a different user
+or port - without re-entering everything.
 
 Passwords are not typed into the host form. They are asked for by the
 connection, at the moment one is needed, with the option to save it - and a

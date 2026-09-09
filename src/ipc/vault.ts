@@ -55,6 +55,41 @@ export function moveHost(hostId: string, folderId: string | null): Promise<void>
   return invoke("vault_move_host", { hostId, folderId });
 }
 
+/**
+ * The editable fields of a host, on their own. Used to seed the editor and to
+ * duplicate a host - a duplicate is a create with these carried across, minus
+ * the id, position and any saved secret, which are the store's to assign.
+ */
+export function hostToInput(host: Host): HostInput {
+  return {
+    folderId: host.folderId,
+    name: host.name,
+    hostname: host.hostname,
+    port: host.port,
+    username: host.username,
+    description: host.description,
+    auth: { ...host.auth },
+    jumpHostId: host.jumpHostId,
+    guarded: host.guarded,
+  };
+}
+
+/**
+ * A name for a duplicate: `"web" -> "web copy"`, then `"web copy 2"` and so on
+ * so a second duplicate does not collide. `taken` is the names already in use.
+ */
+export function copyName(name: string, taken: Iterable<string>): string {
+  const existing = new Set(taken);
+  const base = `${name} copy`;
+  let candidate = base;
+  let n = 2;
+  while (existing.has(candidate)) {
+    candidate = `${base} ${n}`;
+    n += 1;
+  }
+  return candidate;
+}
+
 /** Removes this host's saved password and key passphrase from the keychain. */
 export function forgetSecrets(hostId: string): Promise<void> {
   return invoke("vault_forget_secrets", { hostId });
