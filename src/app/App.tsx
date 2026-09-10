@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { FileDock } from "@/components/files/FileDock";
 import { ForwardPanel } from "@/components/forward/ForwardPanel";
+import { CloseGuardDialog } from "@/components/CloseGuardDialog";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { ConnectDialog, type ConnectRequest } from "@/components/ssh/ConnectDialog";
 import { HostKeyDialog } from "@/components/ssh/HostKeyDialog";
@@ -54,6 +55,7 @@ import {
   type ActionId,
 } from "@/lib/keymap";
 import { writeClipboard } from "@/lib/clipboard";
+import { hasUnfinishedWork, unfinishedWork, type UnfinishedWork } from "@/lib/closeGuard";
 import type { SplitDirection } from "@/lib/panes";
 import { toggleLog } from "@/lib/sessionLog";
 import { activePrompt, usePrompts } from "@/stores/prompts";
@@ -63,6 +65,7 @@ import { useUpdate } from "@/stores/update";
 import { useTransfers } from "@/stores/transfers";
 import { useBroadcast } from "@/stores/broadcast";
 import { activePane, focusedPane, paneForSession, useSessions, type Pane } from "@/stores/sessions";
+import { destroyWindow, onCloseRequested } from "@/ipc/window";
 import { applyThemeVariables, useSettings, useTerminalTheme } from "@/stores/settings";
 import { revealFolder, selectedHost, useVault } from "@/stores/vault";
 
@@ -97,6 +100,8 @@ export default function App() {
   const [modal, setModal] = useState<Modal>({ kind: "none" });
   const [sidebar, setSidebar] = useState(true);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
+  /** Set while the close guard is up, with what it is guarding. */
+  const [closing, setClosing] = useState<UnfinishedWork | null>(null);
   const bootstrapped = useRef(false);
 
   // Chrome colours live in CSS custom properties so a theme switch repaints
@@ -104,6 +109,36 @@ export default function App() {
   useEffect(() => {
     applyThemeVariables(theme, document.documentElement);
   }, [theme]);
+
+  // The window's close button asks first when a session or a transfer would
+  // be cut short. Idle, it closes at once; the dialog only appears when there
+  // is something to lose. State is read from the stores at the moment of the
+  // request rather than captured, so the handler is registered once.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    onCloseRequested((event) => {
+      const work = unfinishedWork(
+        useSessions.getState().tabs,
+        useTransfers.getState().transfers,
+      );
+      if (!hasUnfinishedWork(work)) return;
+      event.preventDefault();
+      setClosing(work);
+    })
+      .then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Outside the webview (tests, a browser preview) there is no window
+        // to guard; the close goes through as it always did.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   /** Kills the sessions behind a set of panes. The backend kill is idempotent. */
   const closeSessions = useCallback(async (panes: Pane[]) => {
@@ -884,6 +919,14 @@ export default function App() {
       </div>
 
       <PasteDialog />
+
+      {closing && (
+        <CloseGuardDialog
+          work={closing}
+          onKeepWorking={() => setClosing(null)}
+          onCloseAnyway={() => void destroyWindow()}
+        />
+      )}
 
       {snippetsOpen && (
         <SnippetPalette
