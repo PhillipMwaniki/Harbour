@@ -11,6 +11,9 @@ All notable changes to Harbour are recorded here. The format follows
   connection settings, and its tab is painted that colour - so the production
   boxes stand out from everything else in the tab strip. The colour is stored
   in the vault, travels with backups, and shows up in the MCP host listing.
+- **Close guard.** Closing the window while a session is live or a file
+  transfer is in flight now asks first, saying what would be cut short. An
+  idle window still closes at once.
 
 ### Changed
 
