@@ -5,6 +5,12 @@ All notable changes to Harbour are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-10
+
+Reach beyond the app: an MCP server that lets AI agents drive your saved hosts,
+the remote leg of port forwarding, and a round of session-manager and terminal
+polish - context menus, folder management, and reconnecting a dropped tab.
+
 ### Added
 
 - **MCP server (preview).** A new `harbour-mcp` binary exposes Harbour's saved
