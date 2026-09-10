@@ -228,6 +228,7 @@ impl Server {
                     "folderId": host.folder_id,
                     "jumpHostId": host.jump_host_id,
                     "guarded": host.guarded,
+                    "tabColor": host.tab_color,
                     "hasSavedPassword": host.has_saved_password,
                 })
             })
@@ -875,6 +876,7 @@ mod tests {
             },
             jump_host_id: None,
             guarded: false,
+            tab_color: None,
         }
     }
 
@@ -1047,6 +1049,7 @@ mod tests {
         vault
             .create_host(HostInput {
                 guarded: true,
+                tab_color: None,
                 ..host_input("prod")
             })
             .unwrap();
@@ -1122,6 +1125,7 @@ mod tests {
         vault
             .create_host(HostInput {
                 guarded: true,
+                tab_color: None,
                 ..host_input("prod")
             })
             .unwrap();
@@ -1190,6 +1194,7 @@ mod tests {
         vault
             .create_host(HostInput {
                 guarded: true,
+                tab_color: None,
                 ..host_input("prod")
             })
             .unwrap();

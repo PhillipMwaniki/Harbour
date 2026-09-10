@@ -194,6 +194,11 @@ command (matched against `settings.guardrails`) before it runs on that host -
 today at the fleet runner, where a batch mistake is most costly. It is a plain
 host field, set through `vault_create_host` / `vault_update_host` like the rest.
 
+`tabColor` names one of nine palette colours - `red`, `orange`, `yellow`,
+`green`, `teal`, `blue`, `purple`, `pink`, `grey` - or is `null`. The vault
+stores only the name; the frontend owns the hues, so a theme change cannot
+strand a saved value. Anything outside the palette is normalised to `null`
+rather than rejected, so a hand-edited backup still restores.
 
 **No command returns a secret.** A `Host` says which methods to try and whether
 a password is expected (`hasSavedPassword`); the password itself is in the

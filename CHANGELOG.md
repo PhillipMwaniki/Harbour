@@ -5,6 +5,13 @@ All notable changes to Harbour are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Tab colours.** A saved host can be given one of nine colours in its
+  connection settings, and its tab is painted that colour - so the production
+  boxes stand out from everything else in the tab strip. The colour is stored
+  in the vault, travels with backups, and shows up in the MCP host listing.
+
 ### Changed
 
 - **Font picker.** The terminal font in Settings is now a dropdown of the

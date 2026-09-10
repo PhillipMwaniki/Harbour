@@ -71,6 +71,7 @@ export function hostToInput(host: Host): HostInput {
     auth: { ...host.auth },
     jumpHostId: host.jumpHostId,
     guarded: host.guarded,
+    tabColor: host.tabColor,
   };
 }
 

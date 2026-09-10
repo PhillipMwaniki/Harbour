@@ -17,7 +17,7 @@ use crate::vault::model::{Folder, FolderId, Host, HostAuth, HostInput, VaultTree
 
 /// Bumped whenever the schema changes; `migrate` walks from whatever the file
 /// is at up to this.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 pub struct Vault {
     connection: Mutex<Connection>,
@@ -250,8 +250,8 @@ impl Vault {
                 "INSERT INTO hosts (
                      id, folder_id, name, hostname, port, username, description,
                      use_agent, key_path, use_password, jump_host_id,
-                     has_saved_password, position, guarded
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?13)",
+                     has_saved_password, position, guarded, tab_color
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?13, ?14)",
                 params![
                     id,
                     input.folder_id,
@@ -266,6 +266,7 @@ impl Vault {
                     input.jump_host_id,
                     position,
                     input.guarded,
+                    input.tab_color,
                 ],
             )
             .map_err(vault_error)?;
@@ -282,6 +283,7 @@ impl Vault {
             jump_host_id: input.jump_host_id,
             has_saved_password: false,
             guarded: input.guarded,
+            tab_color: input.tab_color,
             position,
         })
     }
@@ -299,7 +301,7 @@ impl Vault {
                          folder_id = ?2, name = ?3, hostname = ?4, port = ?5,
                          username = ?6, description = ?7, use_agent = ?8,
                          key_path = ?9, use_password = ?10, jump_host_id = ?11,
-                         guarded = ?12
+                         guarded = ?12, tab_color = ?13
                      WHERE id = ?1",
                     params![
                         id,
@@ -314,6 +316,7 @@ impl Vault {
                         input.auth.use_password,
                         input.jump_host_id,
                         input.guarded,
+                        input.tab_color,
                     ],
                 )
                 .map_err(vault_error)?;
@@ -432,6 +435,13 @@ fn migrate(connection: &Connection) -> AppResult<()> {
             .map_err(vault_error)?;
     }
 
+    if version < 4 {
+        // A named colour for the host's tab, from a fixed palette.
+        connection
+            .execute_batch("ALTER TABLE hosts ADD COLUMN tab_color TEXT;")
+            .map_err(vault_error)?;
+    }
+
     connection
         .pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(vault_error)?;
@@ -441,7 +451,7 @@ fn migrate(connection: &Connection) -> AppResult<()> {
 /// Every host read goes through the same column list, so a schema change
 /// cannot leave one query behind.
 const HOST_COLUMNS: &str = "SELECT id, folder_id, name, hostname, port, username, description, \
-                            use_agent, key_path, use_password, jump_host_id, \n                            has_saved_password, position, guarded \
+                            use_agent, key_path, use_password, jump_host_id, \n                            has_saved_password, position, guarded, tab_color \
                             FROM hosts";
 
 fn host_from_row(row: &Row<'_>) -> rusqlite::Result<Host> {
@@ -462,6 +472,7 @@ fn host_from_row(row: &Row<'_>) -> rusqlite::Result<Host> {
         has_saved_password: row.get(11)?,
         position: row.get(12)?,
         guarded: row.get(13)?,
+        tab_color: row.get(14)?,
     })
 }
 
@@ -587,6 +598,7 @@ mod tests {
             auth: HostAuth::default(),
             jump_host_id: None,
             guarded: false,
+            tab_color: None,
         }
     }
 
@@ -630,6 +642,7 @@ mod tests {
                 },
                 jump_host_id: None,
                 guarded: false,
+                tab_color: None,
             })
             .unwrap();
 

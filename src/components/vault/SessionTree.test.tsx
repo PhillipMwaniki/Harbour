@@ -20,6 +20,7 @@ function host(id: string, overrides: Partial<Host> = {}): Host {
     jumpHostId: null,
     hasSavedPassword: false,
     guarded: false,
+    tabColor: null,
     position: 0,
     ...overrides,
   };

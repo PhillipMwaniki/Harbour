@@ -20,6 +20,7 @@ function host(id: string, folderId: string | null = null): Host {
     jumpHostId: null,
     hasSavedPassword: false,
     guarded: false,
+    tabColor: null,
     position: 0,
   };
 }
@@ -121,6 +122,7 @@ describe("hostToInput", () => {
       auth: { useAgent: true, keyPath: null, usePassword: true },
       jumpHostId: null,
       guarded: false,
+      tabColor: null,
     });
     // No id, position, or saved-password flag: those are the store's to assign.
     expect("id" in input).toBe(false);
