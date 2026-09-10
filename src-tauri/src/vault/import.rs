@@ -315,6 +315,7 @@ pub fn apply(
             jump_host_id: None,
             // Imports never pre-guard a host; the user opts in afterwards.
             guarded: false,
+            tab_color: None,
         };
         let host = vault.create_host(input.clone())?;
         by_name.insert(candidate.name.clone(), host.id.clone());

@@ -48,7 +48,7 @@ Read-only (always available):
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `harbour_list_hosts` | – | saved hosts: id, name, hostname, port, username, folder, jump host, guarded, whether a password is saved |
+| `harbour_list_hosts` | – | saved hosts: id, name, hostname, port, username, folder, jump host, guarded, tab colour, whether a password is saved |
 | `harbour_list_folders` | – | the folder tree: id, name, parent |
 
 Acting on hosts (only with `--allow-write`):

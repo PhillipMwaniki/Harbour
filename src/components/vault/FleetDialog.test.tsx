@@ -32,6 +32,7 @@ function host(id: string, name: string): Host {
     jumpHostId: null,
     hasSavedPassword: false,
     guarded: false,
+    tabColor: null,
     position: 0,
   };
 }

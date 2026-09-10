@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { HighlightImport, LogFormat, LogStatus, SchemeImport, Settings } from "./types";
+import type {
+  FontFamily,
+  HighlightImport,
+  LogFormat,
+  LogStatus,
+  SchemeImport,
+  Settings,
+} from "./types";
 
 /** The settings as the backend last read them. */
 export function settingsLoad(): Promise<Settings> {
@@ -29,6 +36,11 @@ export interface SettingsPaths {
 
 export function settingsPaths(): Promise<SettingsPaths> {
   return invoke<SettingsPaths>("settings_paths");
+}
+
+/** The font families installed on this machine, monospace ones first. */
+export function fontList(): Promise<FontFamily[]> {
+  return invoke<FontFamily[]>("font_list");
 }
 
 /**

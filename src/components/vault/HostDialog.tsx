@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 import { pickPrivateKey } from "@/ipc/dialog";
-import type { Folder, Host, HostInput } from "@/ipc/types";
+import type { Folder, Host, HostInput, TabColor } from "@/ipc/types";
+import { TAB_COLORS } from "@/lib/tabColors";
 import { useThemeCatalogue } from "@/stores/settings";
 import { KeyAuthDialog } from "./KeyAuthDialog";
 
@@ -53,6 +54,7 @@ export function HostDialog({
   const [themeOverride, setThemeOverride] = useState(themeId ?? "");
   const [jumpHostId, setJumpHostId] = useState(host?.jumpHostId ?? "");
   const [guarded, setGuarded] = useState(host?.guarded ?? false);
+  const [tabColor, setTabColor] = useState<TabColor | null>(host?.tabColor ?? null);
   const [keyAuthOpen, setKeyAuthOpen] = useState(false);
   const themes = useThemeCatalogue();
   const hostnameRef = useRef<HTMLInputElement | null>(null);
@@ -84,6 +86,7 @@ export function HostDialog({
       },
       jumpHostId: jumpHostId || null,
       guarded,
+      tabColor,
     }, themeOverride || null);
   };
 
@@ -215,6 +218,8 @@ export function HostDialog({
             ))}
           </select>
         </Field>
+
+        <TabColorField value={tabColor} onChange={setTabColor} />
 
         <Field label="Description" htmlFor="host-description" hint="optional">
           <input
@@ -368,5 +373,61 @@ function Field({
       </label>
       {children}
     </div>
+  );
+}
+
+/**
+ * A row of swatches for the tab colour, "none" first. Radio semantics, so a
+ * screen reader hears one group of nine colours rather than ten buttons.
+ */
+function TabColorField({
+  value,
+  onChange,
+}: {
+  value: TabColor | null;
+  onChange: (color: TabColor | null) => void;
+}) {
+  const swatch =
+    "h-6 w-6 rounded-full border-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--hb-accent)]";
+  return (
+    <fieldset className="mb-3">
+      <legend className="mb-1 text-[var(--hb-fg-muted)]">
+        Tab colour <span className="text-[var(--hb-fg-muted)]">(optional)</span>
+      </legend>
+      <div role="radiogroup" aria-label="Tab colour" className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={value === null}
+          aria-label="No colour"
+          title="No colour"
+          onClick={() => onChange(null)}
+          className={[
+            swatch,
+            "bg-[var(--hb-bg)]",
+            value === null ? "border-[var(--hb-fg)]" : "border-[var(--hb-border)]",
+          ].join(" ")}
+        />
+        {TAB_COLORS.map((color) => (
+          <button
+            key={color.id}
+            type="button"
+            role="radio"
+            aria-checked={value === color.id}
+            aria-label={color.label}
+            title={color.label}
+            onClick={() => onChange(color.id)}
+            style={{ backgroundColor: color.hex }}
+            className={[
+              swatch,
+              value === color.id ? "border-[var(--hb-fg)]" : "border-transparent",
+            ].join(" ")}
+          />
+        ))}
+      </div>
+      <p className="mt-1 text-[var(--hb-fg-muted)]">
+        Paints this host's tab, so production stands out from everything else.
+      </p>
+    </fieldset>
   );
 }

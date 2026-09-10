@@ -194,6 +194,12 @@ command (matched against `settings.guardrails`) before it runs on that host -
 today at the fleet runner, where a batch mistake is most costly. It is a plain
 host field, set through `vault_create_host` / `vault_update_host` like the rest.
 
+`tabColor` names one of nine palette colours - `red`, `orange`, `yellow`,
+`green`, `teal`, `blue`, `purple`, `pink`, `grey` - or is `null`. The vault
+stores only the name; the frontend owns the hues, so a theme change cannot
+strand a saved value. Anything outside the palette is normalised to `null`
+rather than rejected, so a hand-edited backup still restores.
+
 **No command returns a secret.** A `Host` says which methods to try and whether
 a password is expected (`hasSavedPassword`); the password itself is in the
 secret store, keyed by host id, and only ever moves between the store and the
@@ -330,6 +336,7 @@ type FleetResult = {
 | `settings_paths` | - | `{ settings: string, logs: string }` |
 | `theme_import` | `path: string` | `SchemeImport` |
 | `highlight_import` | `path: string` | `HighlightImport` |
+| `font_list` | - | `FontFamily[]` |
 
 `settings_save` replaces the **whole document**; there is no partial update,
 because a settings dialog that merges field by field ends up with two sources
@@ -343,6 +350,11 @@ to `settings.invalid.json` and replaced by defaults rather than deleted, and
 never stops Harbour from starting. **It holds no secrets of any kind**, only
 preferences: theme, font, keymap, highlight rules, per-host theme overrides and
 where logs go.
+
+`font_list` walks the platform font directories and returns every installed
+family as `{ name, monospace }`, monospace families first and then A-Z. The
+flag comes from the font's own fixed-pitch declaration, which plenty of
+monospace fonts omit, so it orders the list and hides nothing.
 
 `theme_import` reads a VS Code theme, a Windows Terminal `settings.json`, an
 iTerm2 `.itermcolors` file, an Xshell `.scs` scheme, a directory of any of

@@ -100,8 +100,18 @@ pub struct Host {
     /// production safeguard. Matching happens in the frontend against the
     /// guardrail rules; this only marks the host as one to guard.
     pub guarded: bool,
+    /// One of [`TAB_COLORS`], or `None` for the theme's plain tab. A visual
+    /// reminder of which tabs are production, chosen from a fixed palette
+    /// so it reads the same in every theme.
+    pub tab_color: Option<String>,
     pub position: i64,
 }
+
+/// The tab colours a host may be given. The frontend owns the actual hues;
+/// the vault only keeps the name, so a theme change cannot strand a value.
+pub const TAB_COLORS: [&str; 9] = [
+    "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink", "grey",
+];
 
 impl Host {
     pub fn target(&self) -> SshTarget {
@@ -136,6 +146,8 @@ pub struct HostInput {
     pub jump_host_id: Option<HostId>,
     #[serde(default)]
     pub guarded: bool,
+    #[serde(default)]
+    pub tab_color: Option<String>,
 }
 
 impl HostInput {
@@ -164,6 +176,13 @@ impl HostInput {
             .jump_host_id
             .map(|id| id.trim().to_string())
             .filter(|id| !id.is_empty());
+        // An unknown colour - a typo in a hand-edited backup, or a palette
+        // entry from a newer build - becomes no colour rather than an error,
+        // so it cannot stop a restore.
+        self.tab_color = self
+            .tab_color
+            .map(|color| color.trim().to_lowercase())
+            .filter(|color| TAB_COLORS.contains(&color.as_str()));
         self
     }
 }
@@ -233,6 +252,7 @@ mod tests {
             auth: HostAuth::default(),
             jump_host_id: None,
             guarded: false,
+            tab_color: None,
         }
         .normalised();
 
@@ -254,9 +274,33 @@ mod tests {
             auth: HostAuth::default(),
             jump_host_id: None,
             guarded: false,
+            tab_color: None,
         }
         .normalised();
 
         assert_eq!(input.port, 22);
+    }
+
+    #[test]
+    fn tab_colour_is_one_of_the_palette_or_nothing() {
+        let input = |color: &str| {
+            HostInput {
+                folder_id: None,
+                name: "web".into(),
+                hostname: "web.example.com".into(),
+                port: 22,
+                username: "deploy".into(),
+                description: None,
+                auth: HostAuth::default(),
+                jump_host_id: None,
+                guarded: false,
+                tab_color: Some(color.into()),
+            }
+            .normalised()
+        };
+
+        assert_eq!(input(" Red ").tab_color.as_deref(), Some("red"));
+        assert_eq!(input("crimson").tab_color, None);
+        assert_eq!(input("").tab_color, None);
     }
 }

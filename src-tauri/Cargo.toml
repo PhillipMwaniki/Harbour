@@ -37,6 +37,9 @@ tracing-appender = "0.2"
 # and in front of CI - for no functional gain.
 russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
 dirs = "6"
+# Lists installed font families for the settings dialog. Pure Rust: it walks
+# the platform font directories itself rather than binding a system library.
+fontdb = "0.24"
 hmac = "0.13"
 sha1 = "0.11"
 data-encoding = "2"

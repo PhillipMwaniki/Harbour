@@ -23,6 +23,7 @@ function existing(overrides: Partial<Host> = {}): Host {
     jumpHostId: null,
     hasSavedPassword: false,
     guarded: false,
+    tabColor: null,
     position: 0,
     ...overrides,
   };
@@ -46,6 +47,26 @@ function setup(props: Partial<React.ComponentProps<typeof HostDialog>> = {}) {
 }
 
 describe("HostDialog", () => {
+  it("paints the tab a colour from the palette", async () => {
+    const { onSave } = setup({ host: existing() });
+
+    expect(screen.getByRole("radio", { name: "No colour" })).toBeChecked();
+    await typing().click(screen.getByRole("radio", { name: "Red" }));
+    await typing().click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ tabColor: "red" }), null);
+  });
+
+  it("takes the colour off again", async () => {
+    const { onSave } = setup({ host: existing({ tabColor: "blue" }) });
+
+    expect(screen.getByRole("radio", { name: "Blue" })).toBeChecked();
+    await typing().click(screen.getByRole("radio", { name: "No colour" }));
+    await typing().click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ tabColor: null }), null);
+  });
+
   it("saves a new host with the defaults filled in", async () => {
     const { onSave } = setup();
 
@@ -64,6 +85,7 @@ describe("HostDialog", () => {
         auth: { useAgent: true, keyPath: null, usePassword: true },
         jumpHostId: null,
         guarded: false,
+        tabColor: null,
       },
       // No theme override: the host looks like everything else.
       null,

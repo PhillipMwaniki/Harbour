@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 
 import { ThemePicker } from "@/components/settings/ThemePicker";
 import type { ShellSpec } from "@/ipc/types";
+import { tabColorStyle } from "@/lib/tabColors";
 import { activePane, tabTitle, type TerminalTab } from "@/stores/sessions";
+import { useVault } from "@/stores/vault";
 
 interface Props {
   tabs: TerminalTab[];
@@ -58,6 +60,7 @@ export function TabBar({
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const hosts = useVault((state) => state.tree.hosts);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -86,6 +89,11 @@ export function TabBar({
           const active = tab.tabId === activeTabId;
           const pane = activePane(tab);
           const title = tabTitle(tab);
+          // The colour follows the pane in front, so a split with a production
+          // pane and a local one shows whichever the user is looking at.
+          const hostId = pane?.target.kind === "host" ? pane.target.hostId : null;
+          const tabColor = hosts.find((host) => host.id === hostId)?.tabColor ?? null;
+          const colored = tabColorStyle(tabColor, active);
           return (
             <div
               key={tab.tabId}
@@ -101,9 +109,12 @@ export function TabBar({
               }}
               className={[
                 "group flex min-w-32 max-w-56 cursor-pointer items-center gap-2 border-r border-[var(--hb-border)] px-3 text-xs",
-                active ? "bg-[var(--hb-bg)]" : "hover:bg-[var(--hb-hover)]",
-                pane?.status === "closed" ? "italic text-[var(--hb-fg-muted)]" : "",
+                colored ? "" : active ? "bg-[var(--hb-bg)]" : "hover:bg-[var(--hb-hover)]",
+                pane?.status === "closed" ? "italic" : "",
+                pane?.status === "closed" && !colored ? "text-[var(--hb-fg-muted)]" : "",
               ].join(" ")}
+              style={colored ?? undefined}
+              data-tab-color={tabColor ?? undefined}
               title={tabTooltip(tab)}
             >
               {pane?.status === "starting" && (

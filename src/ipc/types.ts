@@ -21,6 +21,13 @@ export interface SessionClosed {
 
 export type ShellFamily = "windows" | "wsl" | "unix";
 
+/** One installed font family, as `font_list` reports it. */
+export interface FontFamily {
+  name: string;
+  /** Some face in the family is fixed-pitch. A hint for ordering, not a filter. */
+  monospace: boolean;
+}
+
 export interface ShellSpec {
   id: string;
   label: string;
@@ -140,8 +147,22 @@ export interface Host {
   hasSavedPassword: boolean;
   /** Confirm destructive commands before they run on this host. */
   guarded: boolean;
+  /** A named colour from the tab palette for this host's tab, or `null`. */
+  tabColor: TabColor | null;
   position: number;
 }
+
+/** The nine colours a host's tab may be painted. The hues live in the frontend. */
+export type TabColor =
+  | "red"
+  | "orange"
+  | "yellow"
+  | "green"
+  | "teal"
+  | "blue"
+  | "purple"
+  | "pink"
+  | "grey";
 
 /** The fields a caller may set; ids and positions belong to the store. */
 export interface HostInput {
@@ -154,6 +175,7 @@ export interface HostInput {
   auth: HostAuth;
   jumpHostId: string | null;
   guarded: boolean;
+  tabColor: TabColor | null;
 }
 
 export interface VaultTree {

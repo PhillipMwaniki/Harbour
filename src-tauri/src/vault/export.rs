@@ -99,6 +99,8 @@ struct ExportHost {
     jump_host_id: Option<String>,
     #[serde(default)]
     guarded: bool,
+    #[serde(default)]
+    tab_color: Option<String>,
     position: i64,
 }
 
@@ -174,6 +176,7 @@ where
             auth: h.auth.clone(),
             jump_host_id: h.jump_host_id.clone(),
             guarded: h.guarded,
+            tab_color: h.tab_color.clone(),
             position: h.position,
         })
         .collect();
@@ -357,6 +360,7 @@ fn host_input(host: &ExportHost, folder: Option<FolderId>, jump: Option<HostId>)
         auth: host.auth.clone(),
         jump_host_id: jump,
         guarded: host.guarded,
+        tab_color: host.tab_color.clone(),
     }
 }
 
@@ -406,6 +410,7 @@ mod tests {
             auth: HostAuth::default(),
             jump_host_id: None,
             guarded: false,
+            tab_color: None,
         }
     }
 

@@ -10,6 +10,7 @@ const settingsSave = vi.fn();
 const settingsPaths = vi.fn();
 const themeImport = vi.fn();
 const highlightImport = vi.fn();
+const fontList = vi.fn();
 
 vi.mock("@/ipc/settings", async () => {
   const actual = await vi.importActual<typeof import("@/ipc/settings")>("@/ipc/settings");
@@ -20,6 +21,7 @@ vi.mock("@/ipc/settings", async () => {
     settingsPaths: () => settingsPaths(),
     themeImport: (path: string) => themeImport(path),
     highlightImport: (path: string) => highlightImport(path),
+    fontList: () => fontList(),
   };
 });
 
@@ -46,6 +48,10 @@ function setup(settings: Partial<Settings> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   settingsSave.mockImplementation((settings: Settings) => Promise.resolve(settings));
+  fontList.mockResolvedValue([
+    { name: "JetBrains Mono", monospace: true },
+    { name: "Segoe UI", monospace: false },
+  ]);
 });
 
 describe("appearance", () => {
@@ -55,6 +61,44 @@ describe("appearance", () => {
     await user.click(screen.getByRole("button", { name: /Nord/ }));
 
     expect(saved().themeId).toBe("nord");
+  });
+
+  it("picks the terminal font from what is installed", async () => {
+    const { user } = setup();
+
+    const picker = screen.getByLabelText("Font family");
+    await screen.findByRole("option", { name: "JetBrains Mono" });
+    await user.selectOptions(picker, "JetBrains Mono");
+
+    expect(saved().fontFamily).toBe("JetBrains Mono");
+    expect(screen.queryByLabelText("Custom font family")).not.toBeInTheDocument();
+
+    await user.selectOptions(picker, "");
+    expect(saved().fontFamily).toBeNull();
+  });
+
+  /// A stack typed into settings.json, or a font since uninstalled, must not
+  /// snap back to the default just because it is not in the list.
+  it("keeps a font that is not installed as a custom entry", async () => {
+    const { user } = setup({ fontFamily: "Fira Code, monospace" });
+
+    const box = await screen.findByLabelText("Custom font family");
+    expect(box).toHaveValue("Fira Code, monospace");
+    expect(screen.getByLabelText("Font family")).toHaveDisplayValue("Custom...");
+
+    await user.clear(box);
+    await user.type(box, "Iosevka Term");
+    expect(saved().fontFamily).toBe("Iosevka Term");
+  });
+
+  it("opens a box for a custom font stack", async () => {
+    const { user } = setup();
+
+    await screen.findByRole("option", { name: "JetBrains Mono" });
+    await user.selectOptions(screen.getByLabelText("Font family"), "Custom...");
+    await user.type(screen.getByLabelText("Custom font family"), "Hack");
+
+    expect(saved().fontFamily).toBe("Hack");
   });
 
   it("says where the settings file is, since it can be edited by hand", () => {

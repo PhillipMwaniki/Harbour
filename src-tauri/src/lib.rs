@@ -202,6 +202,7 @@ pub fn run() {
             commands::settings::settings_paths,
             commands::settings::theme_import,
             commands::settings::highlight_import,
+            commands::settings::font_list,
             commands::sftp::sftp_home,
             commands::sftp::sftp_list,
             commands::sftp::sftp_close,
