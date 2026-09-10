@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::settings::fonts::{self, FontFamily};
 use crate::settings::highlight::{self, HighlightImport};
 use crate::settings::scheme::{self, SchemeImport};
 use crate::settings::Settings;
@@ -61,6 +62,13 @@ pub async fn settings_paths(state: State<'_, AppState>) -> AppResult<SettingsPat
         settings: state.settings.path().display().to_string(),
         logs: state.log_dir.display().to_string(),
     })
+}
+
+/// The font families installed on this machine, monospace first. A walk of
+/// the font directories, hence the blocking pool.
+#[tauri::command]
+pub async fn font_list() -> AppResult<Vec<FontFamily>> {
+    blocking(|| Ok(fonts::installed())).await
 }
 
 /// Reads colour schemes from a file or a directory. Writes nothing: the

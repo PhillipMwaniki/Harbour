@@ -9,6 +9,7 @@
 //! logged and replaced by defaults, never fatal.
 
 pub mod color;
+pub mod fonts;
 pub mod highlight;
 pub mod scheme;
 pub mod store;

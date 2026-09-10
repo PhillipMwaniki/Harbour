@@ -5,6 +5,14 @@ All notable changes to Harbour are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Font picker.** The terminal font in Settings is now a dropdown of the
+  fonts installed on the machine, monospace families first, rather than a
+  text box. A "Custom..." entry still takes a hand-written font stack, and a
+  saved value that is not an installed family lands there instead of being
+  lost.
+
 ## [0.5.0] - 2026-09-10
 
 Reach beyond the app: an MCP server that lets AI agents drive your saved hosts,

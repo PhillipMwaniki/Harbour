@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { pickOpenFile, pickSavePath } from "@/ipc/dialog";
-import { highlightImport, logFileName, themeImport } from "@/ipc/settings";
+import { fontList, highlightImport, logFileName, themeImport } from "@/ipc/settings";
 import { exportVault, importVault } from "@/ipc/vault";
 import {
   errorMessage,
+  type FontFamily,
   type Guardrail,
   type HighlightRule,
   type LogFormat,
@@ -189,20 +190,9 @@ function Appearance() {
       <SchemeImporter />
 
       <Section title="Text">
-        <label className="mb-2 block" htmlFor="settings-font">
-          Font family <span className="text-[var(--hb-fg-muted)]">(blank for the default)</span>
-        </label>
-        <input
-          id="settings-font"
-          className={inputClass}
-          value={settings.fontFamily ?? ""}
-          placeholder="Cascadia Mono, JetBrains Mono, monospace"
-          onChange={(event) =>
-            void update((current) => ({
-              ...current,
-              fontFamily: event.target.value.trim() || null,
-            }))
-          }
+        <FontPicker
+          value={settings.fontFamily}
+          onChange={(fontFamily) => void update((current) => ({ ...current, fontFamily }))}
         />
 
         <div className="mt-3 flex gap-4">
@@ -1377,6 +1367,144 @@ function Sync() {
 }
 
 // ---------------------------------------------------------------------------
+
+/** The value of the picker's "Custom..." entry; no font is called this. */
+const CUSTOM_FONT = "\u0000custom";
+
+/**
+ * The terminal font: a dropdown of what is installed, monospace families
+ * first, with a "Custom..." row that opens a text box for a hand-written
+ * stack such as `Cascadia Mono, monospace`. A stored value that is not an
+ * installed family - because it is a stack, or the font was uninstalled -
+ * lands in that box rather than snapping to the default.
+ */
+function FontPicker({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (fontFamily: string | null) => void;
+}) {
+  const [fonts, setFonts] = useState<FontFamily[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  // Chosen "Custom..." explicitly; keeps the box open while it is still blank.
+  const [custom, setCustom] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fontList()
+      .then((list) => {
+        if (!cancelled) setFonts(list);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const installed = fonts ?? [];
+  const monospace = installed.filter((font) => font.monospace);
+  const others = installed.filter((font) => !font.monospace);
+  const listed = value !== null && installed.some((font) => font.name === value);
+  // Until the list arrives nothing counts as custom, so the box does not
+  // flash open for an installed font.
+  const showCustom = custom || (fonts !== null && value !== null && !listed);
+  const selected = showCustom ? CUSTOM_FONT : (value ?? "");
+
+  return (
+    <>
+      <label className="mb-2 block" htmlFor="settings-font">
+        Font family
+      </label>
+      <select
+        id="settings-font"
+        className={inputClass}
+        value={selected}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (next === CUSTOM_FONT) {
+            setCustom(true);
+            return;
+          }
+          setCustom(false);
+          onChange(next || null);
+        }}
+      >
+        <option value="">Default (system monospace)</option>
+        {monospace.length > 0 && (
+          <optgroup label="Monospace">
+            {monospace.map((font) => (
+              <option key={font.name} value={font.name}>
+                {font.name}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        {others.length > 0 && (
+          <optgroup label="Other installed fonts">
+            {others.map((font) => (
+              <option key={font.name} value={font.name}>
+                {font.name}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        <option value={CUSTOM_FONT}>Custom...</option>
+      </select>
+      {fonts === null && !failed && (
+        <p className="mt-1 text-[var(--hb-fg-muted)]">Reading installed fonts...</p>
+      )}
+      {failed && (
+        <p className="mt-1 text-[var(--hb-fg-muted)]">
+          Could not list installed fonts; choose Custom to type a name.
+        </p>
+      )}
+      {showCustom && (
+        <CustomFontInput
+          initial={value ?? ""}
+          focus={custom}
+          onChange={(next) => {
+            // Once somebody is typing here the box stays, even through the
+            // blank moment between clearing it and writing the next name.
+            setCustom(true);
+            onChange(next);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * The hand-written stack. Keeps its own text so a trailing space survives
+ * long enough to type the next word; what is saved is always trimmed.
+ */
+function CustomFontInput({
+  initial,
+  focus,
+  onChange,
+}: {
+  initial: string;
+  focus: boolean;
+  onChange: (fontFamily: string | null) => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  return (
+    <input
+      aria-label="Custom font family"
+      className={`${inputClass} mt-2`}
+      value={draft}
+      autoFocus={focus}
+      placeholder="Cascadia Mono, JetBrains Mono, monospace"
+      onChange={(event) => {
+        setDraft(event.target.value);
+        onChange(event.target.value.trim() || null);
+      }}
+    />
+  );
+}
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (

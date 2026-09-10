@@ -25,6 +25,7 @@ import { actionFor, chordFromEvent, resolveBindings } from "@/lib/keymap";
 import { startLog } from "@/lib/sessionLog";
 import { isMultiline, usePaste } from "@/stores/paste";
 import { pathFromOsc7 } from "@/lib/cwd";
+import { cssFontFamily } from "@/lib/fonts";
 import { defaultFontFamily, type Theme } from "@/lib/themes";
 import { useBroadcast, fanOut } from "@/stores/broadcast";
 import { useSessions, type SessionTarget } from "@/stores/sessions";
@@ -160,7 +161,7 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
     const initial = settingsRef.current;
     const term = new Terminal({
       allowProposedApi: true,
-      fontFamily: initial.fontFamily || defaultFontFamily,
+      fontFamily: initial.fontFamily ? cssFontFamily(initial.fontFamily) : defaultFontFamily,
       fontSize: initial.fontSize,
       lineHeight: 1.2,
       cursorBlink: true,
@@ -367,7 +368,9 @@ export function TerminalView({ tabId, paneId, target, visible, focused, onFocus 
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    term.options.fontFamily = settings.fontFamily || defaultFontFamily;
+    term.options.fontFamily = settings.fontFamily
+      ? cssFontFamily(settings.fontFamily)
+      : defaultFontFamily;
     term.options.fontSize = settings.fontSize;
     term.options.scrollback = settings.scrollback;
     // The cell size changed, so the pty needs the new dimensions.

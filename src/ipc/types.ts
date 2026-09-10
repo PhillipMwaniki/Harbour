@@ -21,6 +21,13 @@ export interface SessionClosed {
 
 export type ShellFamily = "windows" | "wsl" | "unix";
 
+/** One installed font family, as `font_list` reports it. */
+export interface FontFamily {
+  name: string;
+  /** Some face in the family is fixed-pitch. A hint for ordering, not a filter. */
+  monospace: boolean;
+}
+
 export interface ShellSpec {
   id: string;
   label: string;
