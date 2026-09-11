@@ -1,5 +1,6 @@
 import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
 
+import { SftpView } from "@/components/files/SftpView";
 import { clampRatio, type Layout } from "@/lib/panes";
 import { useSessions, type Pane, type TerminalTab } from "@/stores/sessions";
 import { paneHandle } from "./registry";
@@ -19,13 +20,32 @@ function closedMessage(pane: Pane): string {
  * output that was on screen when the connection dropped can still be read and
  * scrolled - the point of keeping a lost pane rather than closing it.
  */
-function ReconnectBar({ message, onReconnect }: { message: string; onReconnect: () => void }) {
+function ReconnectBar({
+  message,
+  onReconnect,
+  onFilesOnly,
+}: {
+  message: string;
+  onReconnect: () => void;
+  /** Offered for a vault host: the account may have SFTP but no shell. */
+  onFilesOnly?: () => void;
+}) {
   return (
     <div
       role="alert"
       className="absolute inset-x-0 top-0 z-10 flex items-center gap-2 border-b border-[var(--hb-border)] bg-[var(--hb-panel)] px-3 py-1 text-xs"
     >
       <span className="min-w-0 flex-1 truncate text-[var(--hb-danger)]">{message}</span>
+      {onFilesOnly && (
+        <button
+          type="button"
+          onClick={onFilesOnly}
+          title="Reopen as a file manager, without a shell"
+          className="shrink-0 rounded border border-[var(--hb-border)] px-2 py-0.5 hover:bg-[var(--hb-hover)]"
+        >
+          Files only
+        </button>
+      )}
       <button
         type="button"
         onClick={onReconnect}
@@ -65,21 +85,35 @@ function Node({ tab, node, visible }: { tab: TerminalTab; node: Layout; visible:
         ].join(" ")}
         style={split && focused ? { outlineColor: "var(--hb-accent)" } : undefined}
       >
-        <TerminalView
-          // Keyed on the reconnect generation: bumping it remounts the terminal
-          // and opens a fresh session for the same target.
-          key={pane.generation}
-          tabId={tab.tabId}
-          paneId={pane.paneId}
-          target={pane.target}
-          visible={visible}
-          focused={focused}
-          onFocus={() => useSessions.getState().setActivePane(tab.tabId, pane.paneId)}
-        />
+        {pane.target.kind === "sftp" ? (
+          <SftpView
+            key={pane.generation}
+            tabId={tab.tabId}
+            paneId={pane.paneId}
+            target={pane.target}
+          />
+        ) : (
+          <TerminalView
+            // Keyed on the reconnect generation: bumping it remounts the terminal
+            // and opens a fresh session for the same target.
+            key={pane.generation}
+            tabId={tab.tabId}
+            paneId={pane.paneId}
+            target={pane.target}
+            visible={visible}
+            focused={focused}
+            onFocus={() => useSessions.getState().setActivePane(tab.tabId, pane.paneId)}
+          />
+        )}
         {pane.status === "closed" && (
           <ReconnectBar
             message={closedMessage(pane)}
             onReconnect={() => useSessions.getState().reconnectPane(tab.tabId, pane.paneId)}
+            onFilesOnly={
+              pane.target.kind === "host"
+                ? () => useSessions.getState().reopenAsSftp(tab.tabId, pane.paneId)
+                : undefined
+            }
           />
         )}
         {pane.log?.active && (

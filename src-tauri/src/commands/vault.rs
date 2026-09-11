@@ -454,6 +454,49 @@ pub async fn host_connect(
     Ok(info)
 }
 
+/// Connects to a saved host for its files alone: authenticates through the
+/// chain, opens no shell, and registers the connection so the `sftp_*` and
+/// transfer commands can ride it. For file-manager tabs, and for accounts
+/// that have SFTP but no shell, where `host_connect` would connect and die.
+///
+/// The session has no output stream - nothing to subscribe to - and no exit
+/// callback: a connection that drops is found out by the next SFTP call,
+/// which fails with the connection closed.
+#[tauri::command]
+pub async fn host_connect_sftp(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    host_id: HostId,
+) -> AppResult<SessionInfo> {
+    let vault = Arc::clone(&state.vault);
+    let lookup = host_id.clone();
+    let host = blocking(move || vault.host(&lookup)).await?;
+    let (dest, jumps) = resolve_endpoints(&app, &state, &host_id).await?;
+
+    let (transport, remote_forwards) =
+        client::connect_headless(jumps, dest, Arc::clone(&state.known_hosts)).await?;
+
+    tracing::info!(host = %host.id, "opened an SFTP-only session to a saved host");
+
+    let opener = transport.opener();
+    // A session with no shell has no output. The sender is dropped here, so a
+    // subscriber - there should be none - sees an immediate end of stream.
+    let (_, output) = tokio::sync::mpsc::channel(1);
+    let info = state.sessions.adopt(NewSession {
+        id: manager::new_id(),
+        kind: SessionKind::Sftp,
+        title: host.name.clone(),
+        transport: Box::new(transport),
+        output,
+    });
+    state
+        .connections
+        .register(info.session_id.clone(), opener, remote_forwards);
+
+    let _ = app.emit("session:opened", &info);
+    Ok(info)
+}
+
 /// The hosts a connection to `host_id` passes through, destination first.
 ///
 /// Follows `jump_host_id` hop by hop. A jump that has been deleted, or a loop,

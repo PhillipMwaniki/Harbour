@@ -55,6 +55,7 @@ export function HostDialog({
   const [jumpHostId, setJumpHostId] = useState(host?.jumpHostId ?? "");
   const [guarded, setGuarded] = useState(host?.guarded ?? false);
   const [tabColor, setTabColor] = useState<TabColor | null>(host?.tabColor ?? null);
+  const [sftpOnly, setSftpOnly] = useState(host?.sftpOnly ?? false);
   const [keyAuthOpen, setKeyAuthOpen] = useState(false);
   const themes = useThemeCatalogue();
   const hostnameRef = useRef<HTMLInputElement | null>(null);
@@ -87,6 +88,7 @@ export function HostDialog({
       jumpHostId: jumpHostId || null,
       guarded,
       tabColor,
+      sftpOnly,
     }, themeOverride || null);
   };
 
@@ -289,6 +291,20 @@ export function HostDialog({
             </p>
           )}
         </fieldset>
+
+        <label className="mb-3 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={sftpOnly}
+            onChange={(event) => setSftpOnly(event.target.checked)}
+          />
+          <span>
+            Files only (SFTP)
+            <span className="block text-[var(--hb-fg-muted)]">
+              Open a file manager instead of a terminal. For accounts that have no shell.
+            </span>
+          </span>
+        </label>
 
         <label className="mb-3 flex items-center gap-2">
           <input

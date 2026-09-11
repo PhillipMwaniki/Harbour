@@ -193,6 +193,7 @@ pub fn run() {
             commands::vault::secret_store_change_master,
             commands::vault::secret_store_lock,
             commands::vault::host_connect,
+            commands::vault::host_connect_sftp,
             commands::fleet::fleet_run,
             commands::keys::key_generate,
             commands::keys::key_deploy,

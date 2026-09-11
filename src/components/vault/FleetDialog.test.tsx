@@ -33,6 +33,7 @@ function host(id: string, name: string): Host {
     hasSavedPassword: false,
     guarded: false,
     tabColor: null,
+    sftpOnly: false,
     position: 0,
   };
 }

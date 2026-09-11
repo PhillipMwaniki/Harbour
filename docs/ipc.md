@@ -182,6 +182,7 @@ id that is no longer waiting - it timed out, or its connection died - returns
 | `secret_store_change_master` | `newMaster: string` | `void` |
 | `secret_store_lock` | - | `void` |
 | `host_connect` | `hostId: string`, `cols: number`, `rows: number` | `SessionInfo` |
+| `host_connect_sftp` | `hostId: string` | `SessionInfo` |
 | `fleet_run` | `hostIds: string[]`, `command: string` | `FleetResult[]` |
 | `key_generate` | `path: string`, `passphrase?: string`, `comment?: string` | `GeneratedKey` |
 | `key_deploy` | `hostId: string`, `publicKey: string` | `{ alreadyPresent: boolean }` |
@@ -293,6 +294,14 @@ type VaultImportSummary = {
 same, except that a saved password is taken from the keychain without asking,
 and a `connection:auth_prompt` for a saved host carries `canRemember: true` so
 the answer can be saved.
+
+`host_connect_sftp` is the same connection with no shell on it: it
+authenticates through the jump chain, opens nothing, and registers the session
+(kind `sftp`) so `sftp_*`, the transfer commands and port forwards can use it.
+It has no output stream - `session_subscribe` on it ends at once - and no exit
+event; a connection that drops is found out by the next SFTP call. This is how
+a file-manager tab connects, and the only way to reach an account that has
+SFTP but no shell. A `Host` with `sftpOnly: true` opens this way by default.
 
 `key_generate` writes an Ed25519 keypair to `path` (and `<path>.pub`),
 optionally encrypting the private key with `passphrase`; the private key file is

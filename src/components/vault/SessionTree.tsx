@@ -10,6 +10,8 @@ import { useVault } from "@/stores/vault";
 export interface HostActions {
   /** Double-click, or Enter, on a host. */
   onConnect: (host: Host) => void;
+  /** Open a file-manager tab for the host: SFTP with no shell. */
+  onConnectSftp: (host: Host) => void;
   onEdit: (host: Host) => void;
   onDuplicate: (host: Host) => void;
   onDelete: (host: Host) => void;
@@ -70,6 +72,7 @@ export function SessionTree(actions: SessionTreeActions) {
     state.kind === "host"
       ? [
           { label: "Connect", onSelect: () => actions.onConnect(state.host) },
+          { label: "Open in SFTP mode", onSelect: () => actions.onConnectSftp(state.host) },
           { label: "Edit…", onSelect: () => actions.onEdit(state.host) },
           { label: "Duplicate", onSelect: () => actions.onDuplicate(state.host) },
           { label: "Copy address", onSelect: () => void writeClipboard(hostAddress(state.host)) },

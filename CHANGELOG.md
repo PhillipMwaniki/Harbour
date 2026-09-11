@@ -11,6 +11,12 @@ All notable changes to Harbour are recorded here. The format follows
   connection settings, and its tab is painted that colour - so the production
   boxes stand out from everything else in the tab strip. The colour is stored
   in the vault, travels with backups, and shows up in the MCP host listing.
+- **SFTP-only connections.** A host can be opened as a file manager instead
+  of a terminal: right-click it and choose "Open in SFTP mode", or tick "Files
+  only (SFTP)" in its settings so it always opens that way. The tab shows this
+  machine beside the host with the transfer queue underneath, and connects
+  with no shell - so accounts that have SFTP but no shell now work. A terminal
+  that dies on such a host offers "Files only" from its reconnect bar.
 - **Close guard.** Closing the window while a session is live or a file
   transfer is in flight now asks first, saying what would be cut short. An
   idle window still closes at once.

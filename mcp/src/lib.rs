@@ -229,6 +229,7 @@ impl Server {
                     "jumpHostId": host.jump_host_id,
                     "guarded": host.guarded,
                     "tabColor": host.tab_color,
+                    "sftpOnly": host.sftp_only,
                     "hasSavedPassword": host.has_saved_password,
                 })
             })
@@ -877,6 +878,7 @@ mod tests {
             jump_host_id: None,
             guarded: false,
             tab_color: None,
+            sftp_only: false,
         }
     }
 
@@ -1050,6 +1052,7 @@ mod tests {
             .create_host(HostInput {
                 guarded: true,
                 tab_color: None,
+                sftp_only: false,
                 ..host_input("prod")
             })
             .unwrap();
@@ -1126,6 +1129,7 @@ mod tests {
             .create_host(HostInput {
                 guarded: true,
                 tab_color: None,
+                sftp_only: false,
                 ..host_input("prod")
             })
             .unwrap();
@@ -1195,6 +1199,7 @@ mod tests {
             .create_host(HostInput {
                 guarded: true,
                 tab_color: None,
+                sftp_only: false,
                 ..host_input("prod")
             })
             .unwrap();

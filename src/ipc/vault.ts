@@ -72,6 +72,7 @@ export function hostToInput(host: Host): HostInput {
     jumpHostId: host.jumpHostId,
     guarded: host.guarded,
     tabColor: host.tabColor,
+    sftpOnly: host.sftpOnly,
   };
 }
 
@@ -196,6 +197,14 @@ export function importVault(path: string, passphrase: string): Promise<VaultImpo
  */
 export function hostConnect(hostId: string, cols: number, rows: number): Promise<SessionInfo> {
   return invoke<SessionInfo>("host_connect", { hostId, cols, rows });
+}
+
+/**
+ * The same connection with no shell on it, for a file-manager tab or a host
+ * whose account has SFTP but no shell. Authenticates like `hostConnect`.
+ */
+export function hostConnectSftp(hostId: string): Promise<SessionInfo> {
+  return invoke<SessionInfo>("host_connect_sftp", { hostId });
 }
 
 // ---------------------------------------------------------------------------

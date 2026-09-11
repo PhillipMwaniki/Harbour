@@ -25,6 +25,8 @@ export type SessionTarget =
   | { kind: "ssh"; target: SshTarget; methods: AuthChoice[] }
   /** A host from the vault. Credentials come from the keychain, not from here. */
   | { kind: "host"; hostId: string; name: string }
+  /** A vault host opened as a file manager: SFTP over SSH, no shell. */
+  | { kind: "sftp"; hostId: string; name: string }
   /** A raw telnet connection. No auth of its own; the login is in-terminal. */
   | { kind: "telnet"; host: string; port: number }
   /** A serial console on a local port. */
@@ -117,6 +119,12 @@ export interface SessionsState {
    * fresh session. A pane that is not closed is left alone.
    */
   reconnectPane: (tabId: string, paneId: string) => void;
+  /**
+   * Turns a terminal pane for a vault host into a file-manager pane for the
+   * same host and reopens it. For the host whose account turned out to have
+   * no shell. A pane that is not for a vault host is left alone.
+   */
+  reopenAsSftp: (tabId: string, paneId: string) => void;
   setTitle: (tabId: string, paneId: string, title: string) => void;
   setLog: (sessionId: string, log: LogStatus | null) => void;
   /** Records the working directory a session reported. */
@@ -144,7 +152,7 @@ export function neighbourOf(tabs: TerminalTab[], tabId: string): string | null {
  * password prompt for a while and an unlabelled tab is no help then.
  */
 export function provisionalTitle(target: SessionTarget, shells: ShellSpec[]): string {
-  if (target.kind === "host") {
+  if (target.kind === "host" || target.kind === "sftp") {
     return target.name;
   }
   if (target.kind === "ssh") {
@@ -332,6 +340,27 @@ export const useSessions = create<SessionsState>((set, get) => ({
                 error: null,
                 // A new session logs afresh, and its cwd is unknown until it
                 // reports one; carrying the old values over would be a lie.
+                log: null,
+                cwd: null,
+                generation: pane.generation + 1,
+              },
+        ),
+      ),
+    })),
+
+  reopenAsSftp: (tabId, paneId) =>
+    set((state) => ({
+      tabs: mapTab(state.tabs, tabId, (tab) =>
+        mapPane(tab, paneId, (pane) =>
+          pane.target.kind !== "host"
+            ? pane
+            : {
+                ...pane,
+                target: { kind: "sftp", hostId: pane.target.hostId, name: pane.target.name },
+                sessionId: null,
+                status: "starting",
+                exitCode: null,
+                error: null,
                 log: null,
                 cwd: null,
                 generation: pane.generation + 1,

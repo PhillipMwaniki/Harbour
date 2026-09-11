@@ -24,6 +24,7 @@ function existing(overrides: Partial<Host> = {}): Host {
     hasSavedPassword: false,
     guarded: false,
     tabColor: null,
+    sftpOnly: false,
     position: 0,
     ...overrides,
   };
@@ -67,6 +68,15 @@ describe("HostDialog", () => {
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ tabColor: null }), null);
   });
 
+  it("can mark a host as files only", async () => {
+    const { onSave } = setup({ host: existing() });
+
+    await typing().click(screen.getByLabelText(/Files only/));
+    await typing().click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ sftpOnly: true }), null);
+  });
+
   it("saves a new host with the defaults filled in", async () => {
     const { onSave } = setup();
 
@@ -86,6 +96,7 @@ describe("HostDialog", () => {
         jumpHostId: null,
         guarded: false,
         tabColor: null,
+        sftpOnly: false,
       },
       // No theme override: the host looks like everything else.
       null,
