@@ -21,6 +21,9 @@ pub enum SessionKind {
     Telnet,
     /// A serial console on a local port.
     Serial,
+    /// An SSH connection with no shell on it, opened for its SFTP channel
+    /// alone - a file-manager tab, or a host whose account has no shell.
+    Sftp,
 }
 
 /// What a session is attached to, from the manager's point of view.

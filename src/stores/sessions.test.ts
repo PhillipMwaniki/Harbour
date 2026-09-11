@@ -25,6 +25,28 @@ const firstTab = () => state().tabs[0];
 describe("tabs", () => {
   beforeEach(reset);
 
+  it("reopens a dead host pane as a file manager for the same host", () => {
+    const { tabId, paneId } = state().openTab({ kind: "host", hostId: "h1", name: "prod" });
+    state().attachSession(tabId, paneId, { sessionId: "s1", kind: "ssh", title: "prod" });
+    state().markSessionClosed("s1", null, "the server refused the shell request");
+
+    state().reopenAsSftp(tabId, paneId);
+
+    const pane = firstTab().panes[paneId];
+    expect(pane.target).toEqual({ kind: "sftp", hostId: "h1", name: "prod" });
+    expect(pane.status).toBe("starting");
+    expect(pane.sessionId).toBeNull();
+    expect(pane.error).toBeNull();
+    expect(pane.generation).toBe(1);
+    expect(pane.title).toBe("prod");
+  });
+
+  it("leaves a pane that is not a vault host alone when asked to reopen as sftp", () => {
+    const { tabId, paneId } = state().openTab({ kind: "local" });
+    state().reopenAsSftp(tabId, paneId);
+    expect(firstTab().panes[paneId].target).toEqual({ kind: "local" });
+  });
+
   it("opens a tab with one pane, in the starting state, and focuses it", () => {
     const { tabId, paneId } = state().openTab();
 

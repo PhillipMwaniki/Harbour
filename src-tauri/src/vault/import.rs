@@ -316,6 +316,7 @@ pub fn apply(
             // Imports never pre-guard a host; the user opts in afterwards.
             guarded: false,
             tab_color: None,
+            sftp_only: false,
         };
         let host = vault.create_host(input.clone())?;
         by_name.insert(candidate.name.clone(), host.id.clone());

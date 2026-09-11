@@ -295,9 +295,20 @@ export default function App() {
     }
   }, []);
 
-  const connectHost = useCallback((host: Host) => {
-    useSessions.getState().openTab({ kind: "host", hostId: host.id, name: host.name });
+  const connectHostSftp = useCallback((host: Host) => {
+    useSessions.getState().openTab({ kind: "sftp", hostId: host.id, name: host.name });
   }, []);
+
+  const connectHost = useCallback(
+    (host: Host) => {
+      if (host.sftpOnly) {
+        connectHostSftp(host);
+        return;
+      }
+      useSessions.getState().openTab({ kind: "host", hostId: host.id, name: host.name });
+    },
+    [connectHostSftp],
+  );
 
   // Broadcast input to every live pane in the active tab, or turn it off.
   const toggleBroadcast = useCallback(() => {
@@ -578,7 +589,9 @@ export default function App() {
   const focusedTerminal = activeTab ? activePane(activeTab) : undefined;
   const remoteSession =
     focusedTerminal &&
-    (focusedTerminal.target.kind === "ssh" || focusedTerminal.target.kind === "host")
+    (focusedTerminal.target.kind === "ssh" ||
+      focusedTerminal.target.kind === "host" ||
+      focusedTerminal.target.kind === "sftp")
       ? focusedTerminal.sessionId
       : null;
 
@@ -684,6 +697,7 @@ export default function App() {
 
             <SessionTree
               onConnect={connectHost}
+              onConnectSftp={connectHostSftp}
               onEdit={(host) => setModal({ kind: "host", host })}
               onDuplicate={(host) => void duplicateHost(host)}
               onDelete={(host) => void removeHost(host)}
@@ -902,6 +916,7 @@ export default function App() {
 
         {filesOpen && (
           <FileDock
+            scope="dock"
             sessionId={remoteSession}
             sessionTitle={remoteSession && focusedTerminal ? focusedTerminal.title : null}
             focusedCwd={focusedTerminal?.cwd ?? null}

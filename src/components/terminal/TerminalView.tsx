@@ -90,6 +90,9 @@ function openSession(target: SessionTarget, cols: number, rows: number): Promise
       return serialConnect(target.path, target.baud);
     case "local":
       return sessionOpen({ shellId: target.shellId, cols, rows });
+    case "sftp":
+      // Rendered by SftpView, never by a terminal.
+      return Promise.reject(new Error("an SFTP pane has no terminal"));
   }
 }
 

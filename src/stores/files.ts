@@ -33,7 +33,12 @@ export interface FilesState {
   follow: boolean;
   showHidden: boolean;
   sort: SortSpec;
-  local: PaneState;
+  /**
+   * The local pane, per place it is shown: the side dock has one, and each
+   * file-manager tab has its own, so browsing to a directory in one does not
+   * move the others. Keyed by a caller-chosen scope.
+   */
+  locals: Record<string, PaneState>;
   /** Where "up" from a local root can go: drives on Windows, `/` elsewhere. */
   roots: string[];
   /** The remote pane, per SSH session. A session that was never browsed has no entry. */
@@ -44,8 +49,8 @@ export interface FilesState {
   toggleFollow: () => void;
   toggleHidden: () => void;
   sortBy: (key: SortKey) => void;
-  /** Lists a local directory: the one given, else the current one, else home. */
-  loadLocal: (path?: string | null) => Promise<void>;
+  /** Lists a local directory for `scope`: the one given, else its current one, else home. */
+  loadLocal: (scope: string, path?: string | null) => Promise<void>;
   loadRoots: () => Promise<void>;
   /** Same for a session's remote side; the first call opens its SFTP channel. */
   loadRemote: (sessionId: string, path?: string | null) => Promise<void>;
@@ -56,7 +61,7 @@ export interface FilesState {
 // A listing that arrives after a newer one was asked for is stale: navigating
 // twice quickly must end up in the second directory, not whichever answered
 // last. These count requests so a late answer can be recognised and dropped.
-let localRequests = 0;
+const localRequests = new Map<string, number>();
 const remoteRequests = new Map<string, number>();
 
 export const useFiles = create<FilesState>((set, get) => ({
@@ -64,7 +69,7 @@ export const useFiles = create<FilesState>((set, get) => ({
   follow: false,
   showHidden: false,
   sort: DEFAULT_SORT,
-  local: EMPTY_PANE,
+  locals: {},
   roots: [],
   remote: {},
 
@@ -74,28 +79,45 @@ export const useFiles = create<FilesState>((set, get) => ({
   toggleHidden: () => set((state) => ({ showHidden: !state.showHidden })),
   sortBy: (key) => set((state) => ({ sort: nextSort(state.sort, key) })),
 
-  loadLocal: async (path) => {
-    localRequests += 1;
-    const request = localRequests;
-    set((state) => ({ local: { ...state.local, loading: true, error: null } }));
+  loadLocal: async (scope, path) => {
+    const request = (localRequests.get(scope) ?? 0) + 1;
+    localRequests.set(scope, request);
+    set((state) => ({
+      locals: {
+        ...state.locals,
+        [scope]: { ...(state.locals[scope] ?? EMPTY_PANE), loading: true, error: null },
+      },
+    }));
     try {
-      const target = path ?? get().local.path ?? (await localHome());
+      const target = path ?? get().locals[scope]?.path ?? (await localHome());
       const listing = await localList(target);
-      if (request !== localRequests) return;
-      set({
-        local: {
-          path: listing.path,
-          parent: listing.parent,
-          entries: listing.entries,
-          loading: false,
-          error: null,
+      if (localRequests.get(scope) !== request) return;
+      set((state) => ({
+        locals: {
+          ...state.locals,
+          [scope]: {
+            path: listing.path,
+            parent: listing.parent,
+            entries: listing.entries,
+            loading: false,
+            error: null,
+          },
         },
-      });
+      }));
     } catch (err) {
-      if (request !== localRequests) return;
+      if (localRequests.get(scope) !== request) return;
       // The previous listing stays on screen: a directory that would not
       // open is a message, not a reason to show nothing.
-      set((state) => ({ local: { ...state.local, loading: false, error: errorMessage(err) } }));
+      set((state) => ({
+        locals: {
+          ...state.locals,
+          [scope]: {
+            ...(state.locals[scope] ?? EMPTY_PANE),
+            loading: false,
+            error: errorMessage(err),
+          },
+        },
+      }));
     }
   },
 
@@ -157,6 +179,11 @@ export const useFiles = create<FilesState>((set, get) => ({
     });
   },
 }));
+
+/** The local pane for a scope, or an empty one if it has not been browsed. */
+export function localPane(state: FilesState, scope: string): PaneState {
+  return state.locals[scope] ?? EMPTY_PANE;
+}
 
 /** The remote pane for a session, or an empty one it if has not been browsed. */
 export function remotePane(state: FilesState, sessionId: string | null): PaneState {

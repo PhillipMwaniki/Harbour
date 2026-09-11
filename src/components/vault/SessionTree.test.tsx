@@ -21,6 +21,7 @@ function host(id: string, overrides: Partial<Host> = {}): Host {
     hasSavedPassword: false,
     guarded: false,
     tabColor: null,
+    sftpOnly: false,
     position: 0,
     ...overrides,
   };
@@ -29,6 +30,7 @@ function host(id: string, overrides: Partial<Host> = {}): Host {
 function actions(): SessionTreeActions {
   return {
     onConnect: vi.fn(),
+    onConnectSftp: vi.fn(),
     onEdit: vi.fn(),
     onDuplicate: vi.fn(),
     onDelete: vi.fn(),
@@ -58,6 +60,18 @@ afterEach(() => {
 });
 
 describe("SessionTree context menu", () => {
+  it("offers to open a host as a file manager", async () => {
+    seed([host("files")]);
+    const acts = actions();
+    render(<SessionTree {...acts} />);
+
+    fireEvent.contextMenu(screen.getByText("files"));
+    await typing().click(screen.getByRole("menuitem", { name: "Open in SFTP mode" }));
+
+    expect(acts.onConnectSftp).toHaveBeenCalledWith(expect.objectContaining({ id: "files" }));
+    expect(acts.onConnect).not.toHaveBeenCalled();
+  });
+
   it("opens a menu on right-click and duplicates through it", async () => {
     seed([host("web")]);
     const acts = actions();

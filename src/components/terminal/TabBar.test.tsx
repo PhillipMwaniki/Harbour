@@ -20,6 +20,7 @@ const prod: Host = {
   hasSavedPassword: false,
   guarded: true,
   tabColor: "red",
+  sftpOnly: false,
   position: 0,
 };
 

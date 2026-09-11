@@ -17,7 +17,7 @@ use crate::vault::model::{Folder, FolderId, Host, HostAuth, HostInput, VaultTree
 
 /// Bumped whenever the schema changes; `migrate` walks from whatever the file
 /// is at up to this.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 pub struct Vault {
     connection: Mutex<Connection>,
@@ -250,8 +250,8 @@ impl Vault {
                 "INSERT INTO hosts (
                      id, folder_id, name, hostname, port, username, description,
                      use_agent, key_path, use_password, jump_host_id,
-                     has_saved_password, position, guarded, tab_color
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?13, ?14)",
+                     has_saved_password, position, guarded, tab_color, sftp_only
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?13, ?14, ?15)",
                 params![
                     id,
                     input.folder_id,
@@ -267,6 +267,7 @@ impl Vault {
                     position,
                     input.guarded,
                     input.tab_color,
+                    input.sftp_only,
                 ],
             )
             .map_err(vault_error)?;
@@ -284,6 +285,7 @@ impl Vault {
             has_saved_password: false,
             guarded: input.guarded,
             tab_color: input.tab_color,
+            sftp_only: input.sftp_only,
             position,
         })
     }
@@ -301,7 +303,7 @@ impl Vault {
                          folder_id = ?2, name = ?3, hostname = ?4, port = ?5,
                          username = ?6, description = ?7, use_agent = ?8,
                          key_path = ?9, use_password = ?10, jump_host_id = ?11,
-                         guarded = ?12, tab_color = ?13
+                         guarded = ?12, tab_color = ?13, sftp_only = ?14
                      WHERE id = ?1",
                     params![
                         id,
@@ -317,6 +319,7 @@ impl Vault {
                         input.jump_host_id,
                         input.guarded,
                         input.tab_color,
+                        input.sftp_only,
                     ],
                 )
                 .map_err(vault_error)?;
@@ -442,6 +445,13 @@ fn migrate(connection: &Connection) -> AppResult<()> {
             .map_err(vault_error)?;
     }
 
+    if version < 5 {
+        // Whether the host opens as a file manager rather than a terminal.
+        connection
+            .execute_batch("ALTER TABLE hosts ADD COLUMN sftp_only INTEGER NOT NULL DEFAULT 0;")
+            .map_err(vault_error)?;
+    }
+
     connection
         .pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(vault_error)?;
@@ -451,7 +461,7 @@ fn migrate(connection: &Connection) -> AppResult<()> {
 /// Every host read goes through the same column list, so a schema change
 /// cannot leave one query behind.
 const HOST_COLUMNS: &str = "SELECT id, folder_id, name, hostname, port, username, description, \
-                            use_agent, key_path, use_password, jump_host_id, \n                            has_saved_password, position, guarded, tab_color \
+                            use_agent, key_path, use_password, jump_host_id, \n                            has_saved_password, position, guarded, tab_color, sftp_only \
                             FROM hosts";
 
 fn host_from_row(row: &Row<'_>) -> rusqlite::Result<Host> {
@@ -473,6 +483,7 @@ fn host_from_row(row: &Row<'_>) -> rusqlite::Result<Host> {
         position: row.get(12)?,
         guarded: row.get(13)?,
         tab_color: row.get(14)?,
+        sftp_only: row.get(15)?,
     })
 }
 
@@ -599,6 +610,7 @@ mod tests {
             jump_host_id: None,
             guarded: false,
             tab_color: None,
+            sftp_only: false,
         }
     }
 
@@ -643,6 +655,7 @@ mod tests {
                 jump_host_id: None,
                 guarded: false,
                 tab_color: None,
+                sftp_only: false,
             })
             .unwrap();
 

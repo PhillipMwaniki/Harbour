@@ -104,6 +104,10 @@ pub struct Host {
     /// reminder of which tabs are production, chosen from a fixed palette
     /// so it reads the same in every theme.
     pub tab_color: Option<String>,
+    /// Open this host as a file manager rather than a terminal. For accounts
+    /// that have SFTP but no shell (`internal-sftp`, a `nologin` shell), where
+    /// a terminal would connect and then die.
+    pub sftp_only: bool,
     pub position: i64,
 }
 
@@ -148,6 +152,8 @@ pub struct HostInput {
     pub guarded: bool,
     #[serde(default)]
     pub tab_color: Option<String>,
+    #[serde(default)]
+    pub sftp_only: bool,
 }
 
 impl HostInput {
@@ -253,6 +259,7 @@ mod tests {
             jump_host_id: None,
             guarded: false,
             tab_color: None,
+            sftp_only: false,
         }
         .normalised();
 
@@ -275,6 +282,7 @@ mod tests {
             jump_host_id: None,
             guarded: false,
             tab_color: None,
+            sftp_only: false,
         }
         .normalised();
 
@@ -295,6 +303,7 @@ mod tests {
                 jump_host_id: None,
                 guarded: false,
                 tab_color: Some(color.into()),
+                sftp_only: false,
             }
             .normalised()
         };

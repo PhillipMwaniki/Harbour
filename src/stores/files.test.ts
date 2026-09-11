@@ -16,7 +16,7 @@ vi.mock("@/ipc/files", () => ({
   sftpList: (sessionId: string, path: string) => sftpList(sessionId, path),
 }));
 
-const { EMPTY_PANE, remotePane, useFiles } = await import("./files");
+const { EMPTY_PANE, localPane, remotePane, useFiles } = await import("./files");
 
 function entry(name: string, kind: FileEntry["kind"] = "file"): FileEntry {
   return {
@@ -44,7 +44,7 @@ beforeEach(() => {
     open: false,
     showHidden: false,
     sort: { key: "name", ascending: true },
-    local: EMPTY_PANE,
+    locals: {},
     roots: [],
     remote: {},
   });
@@ -61,17 +61,17 @@ beforeEach(() => {
 
 describe("the local pane", () => {
   it("starts at home when it has nowhere else to be", async () => {
-    await state().loadLocal();
+    await state().loadLocal("dock");
 
     expect(localHome).toHaveBeenCalledTimes(1);
-    expect(state().local.path).toBe("/home/me");
-    expect(state().local.entries.map((e) => e.name)).toEqual(["a.txt"]);
-    expect(state().local.loading).toBe(false);
+    expect(localPane(state(), "dock").path).toBe("/home/me");
+    expect(localPane(state(), "dock").entries.map((e) => e.name)).toEqual(["a.txt"]);
+    expect(localPane(state(), "dock").loading).toBe(false);
   });
 
   it("refreshes the current directory when asked with no path", async () => {
-    await state().loadLocal("/etc");
-    await state().loadLocal();
+    await state().loadLocal("dock", "/etc");
+    await state().loadLocal("dock");
 
     expect(localHome).not.toHaveBeenCalled();
     expect(localList).toHaveBeenLastCalledWith("/etc");
@@ -80,15 +80,15 @@ describe("the local pane", () => {
   /// A directory that will not open must not blank the pane: the user is
   /// still somewhere, and needs to see where.
   it("keeps the last listing when a new one fails, and says why", async () => {
-    await state().loadLocal("/etc");
+    await state().loadLocal("dock", "/etc");
     localList.mockRejectedValueOnce({ code: "FILES_ERROR", message: "/root: Permission denied" });
 
-    await state().loadLocal("/root");
+    await state().loadLocal("dock", "/root");
 
-    expect(state().local.path).toBe("/etc");
-    expect(state().local.entries).toHaveLength(1);
-    expect(state().local.error).toContain("Permission denied");
-    expect(state().local.loading).toBe(false);
+    expect(localPane(state(), "dock").path).toBe("/etc");
+    expect(localPane(state(), "dock").entries).toHaveLength(1);
+    expect(localPane(state(), "dock").error).toContain("Permission denied");
+    expect(localPane(state(), "dock").loading).toBe(false);
   });
 
   it("drops a listing that arrives after a newer request", async () => {
@@ -99,13 +99,22 @@ describe("the local pane", () => {
           releaseSlow = resolve;
         }),
     );
-    const slow = state().loadLocal("/slow");
-    await state().loadLocal("/fast");
+    const slow = state().loadLocal("dock", "/slow");
+    await state().loadLocal("dock", "/fast");
 
     releaseSlow(listing("/slow", "/", "late.txt"));
     await slow;
 
-    expect(state().local.path).toBe("/fast");
+    expect(localPane(state(), "dock").path).toBe("/fast");
+  });
+
+  it("keeps one place per scope, so a file-manager tab does not move the dock", async () => {
+    await state().loadLocal("dock", "/etc");
+    await state().loadLocal("tab-1", "/var");
+
+    expect(localPane(state(), "dock").path).toBe("/etc");
+    expect(localPane(state(), "tab-1").path).toBe("/var");
+    expect(localPane(state(), "tab-2").path).toBeNull();
   });
 
   it("loads the roots", async () => {

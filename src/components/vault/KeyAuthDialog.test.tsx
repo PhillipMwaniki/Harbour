@@ -32,6 +32,7 @@ const host: Host = {
   hasSavedPassword: false,
   guarded: false,
   tabColor: null,
+  sftpOnly: false,
   position: 0,
 };
 

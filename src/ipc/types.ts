@@ -5,7 +5,7 @@
  * and in `docs/ipc.md` in the same commit.
  */
 
-export type SessionKind = "local" | "ssh" | "telnet" | "serial";
+export type SessionKind = "local" | "ssh" | "telnet" | "serial" | "sftp";
 
 export interface SessionInfo {
   sessionId: string;
@@ -149,6 +149,8 @@ export interface Host {
   guarded: boolean;
   /** A named colour from the tab palette for this host's tab, or `null`. */
   tabColor: TabColor | null;
+  /** Open as a file manager rather than a terminal: for accounts with SFTP but no shell. */
+  sftpOnly: boolean;
   position: number;
 }
 
@@ -176,6 +178,7 @@ export interface HostInput {
   jumpHostId: string | null;
   guarded: boolean;
   tabColor: TabColor | null;
+  sftpOnly: boolean;
 }
 
 export interface VaultTree {

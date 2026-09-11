@@ -91,7 +91,8 @@ export function TabBar({
           const title = tabTitle(tab);
           // The colour follows the pane in front, so a split with a production
           // pane and a local one shows whichever the user is looking at.
-          const hostId = pane?.target.kind === "host" ? pane.target.hostId : null;
+          const hostId =
+            pane?.target.kind === "host" || pane?.target.kind === "sftp" ? pane.target.hostId : null;
           const tabColor = hosts.find((host) => host.id === hostId)?.tabColor ?? null;
           const colored = tabColorStyle(tabColor, active);
           return (

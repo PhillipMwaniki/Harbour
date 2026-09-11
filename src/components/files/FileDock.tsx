@@ -14,19 +14,26 @@ import {
 } from "@/ipc/files";
 import { errorMessage, FINISHED_STATES, type TransferRequest } from "@/ipc/types";
 import { joinPath } from "@/lib/files";
-import { remotePane, useFiles } from "@/stores/files";
+import { localPane, remotePane, useFiles } from "@/stores/files";
 import { firstConflict, useTransfers } from "@/stores/transfers";
 import { ConflictDialog } from "./ConflictDialog";
 import { FilePane, type PaneActions, type PaneSide } from "./FilePane";
 import { TransferPanel } from "./TransferPanel";
 
 interface Props {
+  /**
+   * `dock`: beside the terminals, remote over local, following the focused
+   * terminal. `tab`: filling a tab, local beside remote, one fixed session.
+   */
+  layout?: "dock" | "tab";
+  /** Which local pane this is: the dock's, or a tab's own. */
+  scope: string;
   /** The SSH session of the focused terminal, or `null` for a local shell. */
   sessionId: string | null;
   sessionTitle: string | null;
   /** The focused terminal's working directory, for follow-cwd. */
   focusedCwd: string | null;
-  onClose: () => void;
+  onClose?: () => void;
 }
 
 /** A drag of rows from one pane, and where it would land right now. */
@@ -44,12 +51,20 @@ function baseName(path: string): string {
   return cut === -1 ? trimmed : trimmed.slice(cut + 1);
 }
 
-/** The pane and, if any, the directory row under a point on screen. */
-function hitTest(x: number, y: number): { side: PaneSide; dir: string | null } | null {
+/**
+ * The pane and, if any, the directory row under a point on screen - within
+ * `root` only, since the dock and a file-manager tab can both be on screen
+ * and a drop must land in exactly one of them.
+ */
+function hitTest(
+  root: HTMLElement | null,
+  x: number,
+  y: number,
+): { side: PaneSide; dir: string | null } | null {
   const element = document.elementFromPoint(x, y);
   if (!(element instanceof Element)) return null;
   const pane = element.closest<HTMLElement>("[data-pane-side]");
-  if (!pane) return null;
+  if (!pane || !root?.contains(pane)) return null;
   const side = pane.dataset.paneSide as PaneSide;
   const row = element.closest<HTMLElement>("[data-drop-dir]");
   return { side, dir: row?.dataset.dropDir ?? null };
@@ -70,11 +85,19 @@ function hitTest(x: number, y: number): { side: PaneSide; dir: string | null } |
  * panes use pointer events rather than HTML5 drag and drop, because enabling
  * the latter would disable the desktop drop on Windows.
  */
-export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props) {
+export function FileDock({
+  layout = "dock",
+  scope,
+  sessionId,
+  sessionTitle,
+  focusedCwd,
+  onClose,
+}: Props) {
+  const rootRef = useRef<HTMLElement | null>(null);
   const showHidden = useFiles((state) => state.showHidden);
   const follow = useFiles((state) => state.follow);
   const sort = useFiles((state) => state.sort);
-  const local = useFiles((state) => state.local);
+  const local = useFiles((state) => localPane(state, scope));
   const roots = useFiles((state) => state.roots);
   const remote = useFiles((state) => remotePane(state, sessionId));
   const { loadLocal, loadRoots, loadRemote, toggleHidden, toggleFollow, sortBy } = useFiles.getState();
@@ -88,11 +111,11 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
   const [opError, setOpError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (useFiles.getState().local.path === null) {
-      void loadLocal();
+    if (useFiles.getState().locals[scope] === undefined) {
+      void loadLocal(scope);
       void loadRoots();
     }
-  }, [loadLocal, loadRoots]);
+  }, [scope, loadLocal, loadRoots]);
 
   // The first look at a session opens its SFTP channel; after that the pane
   // remembers where it was.
@@ -108,8 +131,8 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
   useEffect(() => {
     if (!follow || !focusedCwd) return;
     if (sessionId) void loadRemote(sessionId, focusedCwd);
-    else void loadLocal(focusedCwd);
-  }, [follow, focusedCwd, sessionId, loadRemote, loadLocal]);
+    else void loadLocal(scope, focusedCwd);
+  }, [follow, focusedCwd, sessionId, scope, loadRemote, loadLocal]);
 
   // A selection is of the directory it was made in.
   useEffect(() => setRemoteSelected(new Set()), [remote.path, sessionId]);
@@ -122,10 +145,10 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
       if (!FINISHED_STATES.has(transfer.state) || seenFinished.current.has(transfer.id)) continue;
       seenFinished.current.add(transfer.id);
       if (transfer.state !== "done" && transfer.state !== "skipped") continue;
-      if (transfer.direction === "download") void loadLocal();
+      if (transfer.direction === "download") void loadLocal(scope);
       else void loadRemote(transfer.sessionId);
     }
-  }, [transfers, loadLocal, loadRemote]);
+  }, [transfers, scope, loadLocal, loadRemote]);
 
   /** Copies `names` from one pane into a directory of the other. */
   const copyAcross = useCallback(
@@ -149,7 +172,7 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
   useEffect(() => {
     if (!drag) return;
     const move = (event: globalThis.PointerEvent) => {
-      const hit = hitTest(event.clientX, event.clientY);
+      const hit = hitTest(rootRef.current, event.clientX, event.clientY);
       setDrag((current) =>
         current
           ? {
@@ -162,7 +185,7 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
       );
     };
     const up = (event: globalThis.PointerEvent) => {
-      const hit = hitTest(event.clientX, event.clientY);
+      const hit = hitTest(rootRef.current, event.clientX, event.clientY);
       setDrag((current) => {
         if (current && hit && hit.side !== current.from) {
           copyAcross(current.from, current.names, hit.dir);
@@ -186,7 +209,7 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
     let cancelled = false;
     const overRemote = (physical: { x: number; y: number }) => {
       const scale = window.devicePixelRatio || 1;
-      const hit = hitTest(physical.x / scale, physical.y / scale);
+      const hit = hitTest(rootRef.current, physical.x / scale, physical.y / scale);
       return hit?.side === "remote";
     };
     try {
@@ -236,7 +259,7 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
     if (side === "remote") {
       if (sessionId) void loadRemote(sessionId);
     } else {
-      void loadLocal();
+      void loadLocal(scope);
     }
   };
 
@@ -290,31 +313,46 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
     return drag.target.dir ?? "pane";
   };
 
+  const inTab = layout === "tab";
+  // In a tab the two panes sit side by side, local first as in every
+  // two-pane file manager; in the dock they stack, remote on top. `contents`
+  // makes the wrappers vanish from the dock's column so it lays out as before.
+  const paneWrap = inTab ? "flex min-h-0 min-w-0 flex-1 flex-col" : "contents";
+
   return (
     <aside
+      ref={rootRef}
       aria-label="Files"
-      className="flex w-96 shrink-0 flex-col border-l border-[var(--hb-border)] bg-[var(--hb-panel)]"
+      className={
+        inTab
+          ? "flex h-full w-full flex-col bg-[var(--hb-panel)]"
+          : "flex w-96 shrink-0 flex-col border-l border-[var(--hb-border)] bg-[var(--hb-panel)]"
+      }
       style={drag ? { cursor: "copy", userSelect: "none" } : undefined}
     >
       <div className="flex items-center gap-2 border-b border-[var(--hb-border)] px-2 py-1 text-xs">
-        <span className="mr-auto font-medium">Files</span>
-        <label className="flex items-center gap-1 text-[var(--hb-fg-muted)]" title="Follow the focused shell's directory (needs OSC 7)">
-          <input type="checkbox" checked={follow} onChange={toggleFollow} />
-          Follow
-        </label>
+        <span className="mr-auto font-medium">{inTab && sessionTitle ? `Files · ${sessionTitle}` : "Files"}</span>
+        {!inTab && (
+          <label className="flex items-center gap-1 text-[var(--hb-fg-muted)]" title="Follow the focused shell's directory (needs OSC 7)">
+            <input type="checkbox" checked={follow} onChange={toggleFollow} />
+            Follow
+          </label>
+        )}
         <label className="flex items-center gap-1 text-[var(--hb-fg-muted)]">
           <input type="checkbox" checked={showHidden} onChange={toggleHidden} />
           Hidden
         </label>
-        <button
-          type="button"
-          aria-label="Close files"
-          title="Close (Ctrl+Shift+S)"
-          className="rounded px-2 py-0.5 hover:bg-[var(--hb-hover)]"
-          onClick={onClose}
-        >
-          &times;
-        </button>
+        {onClose && (
+          <button
+            type="button"
+            aria-label="Close files"
+            title="Close (Ctrl+Shift+S)"
+            className="rounded px-2 py-0.5 hover:bg-[var(--hb-hover)]"
+            onClick={onClose}
+          >
+            &times;
+          </button>
+        )}
       </div>
 
       {opError && (
@@ -329,65 +367,71 @@ export function FileDock({ sessionId, sessionTitle, focusedCwd, onClose }: Props
         </p>
       )}
 
-      <FilePane
-        side="remote"
-        title={sessionTitle ? `Remote · ${sessionTitle}` : "Remote"}
-        pane={remote}
-        sort={sort}
-        showHidden={showHidden}
-        selected={remoteSelected}
-        onSelect={setRemoteSelected}
-        onNavigate={(path) => {
-          if (sessionId) void loadRemote(sessionId, path);
-        }}
-        onRefresh={() => {
-          if (sessionId) void loadRemote(sessionId);
-        }}
-        onHome={() => {
-          if (!sessionId) return;
-          void sftpHome(sessionId)
-            .then((home) => loadRemote(sessionId, home))
-            // The same failure a listing would hit; let the listing report it.
-            .catch(() => loadRemote(sessionId));
-        }}
-        onSort={sortBy}
-        actions={actionsFor("remote")}
-        onDragStart={(names, pointer) =>
-          setDrag({ from: "remote", names, x: pointer.x, y: pointer.y, target: null })
-        }
-        dropHint={dropHintFor("remote")}
-        placeholder={
-          sessionId
-            ? "Opening the remote file system…"
-            : "Focus an SSH terminal to browse its files."
-        }
-      />
+      <div className={inTab ? "flex min-h-0 min-w-0 flex-1 flex-row" : "contents"}>
+        <div className={`${paneWrap}${inTab ? " order-last" : ""}`}>
+          <FilePane
+            side="remote"
+            title={sessionTitle ? `Remote · ${sessionTitle}` : "Remote"}
+            pane={remote}
+            sort={sort}
+            showHidden={showHidden}
+            selected={remoteSelected}
+            onSelect={setRemoteSelected}
+            onNavigate={(path) => {
+              if (sessionId) void loadRemote(sessionId, path);
+            }}
+            onRefresh={() => {
+              if (sessionId) void loadRemote(sessionId);
+            }}
+            onHome={() => {
+              if (!sessionId) return;
+              void sftpHome(sessionId)
+                .then((home) => loadRemote(sessionId, home))
+                // The same failure a listing would hit; let the listing report it.
+                .catch(() => loadRemote(sessionId));
+            }}
+            onSort={sortBy}
+            actions={actionsFor("remote")}
+            onDragStart={(names, pointer) =>
+              setDrag({ from: "remote", names, x: pointer.x, y: pointer.y, target: null })
+            }
+            dropHint={dropHintFor("remote")}
+            placeholder={
+              sessionId
+                ? "Opening the remote file system…"
+                : "Focus an SSH terminal to browse its files."
+            }
+          />
+        </div>
 
-      <div className="h-px shrink-0 bg-[var(--hb-border)]" />
+        <div className={inTab ? "w-px shrink-0 bg-[var(--hb-border)]" : "h-px shrink-0 bg-[var(--hb-border)]"} />
 
-      <FilePane
-        side="local"
-        title="Local"
-        pane={local}
-        sort={sort}
-        showHidden={showHidden}
-        roots={roots}
-        selected={localSelected}
-        onSelect={setLocalSelected}
-        onNavigate={(path) => void loadLocal(path)}
-        onRefresh={() => void loadLocal()}
-        onHome={() => {
-          void localHome()
-            .then((home) => loadLocal(home))
-            .catch(() => loadLocal());
-        }}
-        onSort={sortBy}
-        actions={actionsFor("local")}
-        onDragStart={(names, pointer) =>
-          setDrag({ from: "local", names, x: pointer.x, y: pointer.y, target: null })
-        }
-        dropHint={dropHintFor("local")}
-      />
+        <div className={paneWrap}>
+          <FilePane
+            side="local"
+            title="Local"
+            pane={local}
+            sort={sort}
+            showHidden={showHidden}
+            roots={roots}
+            selected={localSelected}
+            onSelect={setLocalSelected}
+            onNavigate={(path) => void loadLocal(scope, path)}
+            onRefresh={() => void loadLocal(scope)}
+            onHome={() => {
+              void localHome()
+                .then((home) => loadLocal(scope, home))
+                .catch(() => loadLocal(scope));
+            }}
+            onSort={sortBy}
+            actions={actionsFor("local")}
+            onDragStart={(names, pointer) =>
+              setDrag({ from: "local", names, x: pointer.x, y: pointer.y, target: null })
+            }
+            dropHint={dropHintFor("local")}
+          />
+        </div>
+      </div>
 
       <TransferPanel />
 

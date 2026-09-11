@@ -27,6 +27,7 @@ function host(id: string, folderId: string | null = null): Host {
     hasSavedPassword: false,
     guarded: false,
     tabColor: null,
+    sftpOnly: false,
     position: 0,
   };
 }

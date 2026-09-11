@@ -21,6 +21,7 @@ function host(id: string, folderId: string | null = null): Host {
     hasSavedPassword: false,
     guarded: false,
     tabColor: null,
+    sftpOnly: false,
     position: 0,
   };
 }
@@ -123,6 +124,7 @@ describe("hostToInput", () => {
       jumpHostId: null,
       guarded: false,
       tabColor: null,
+      sftpOnly: false,
     });
     // No id, position, or saved-password flag: those are the store's to assign.
     expect("id" in input).toBe(false);
