@@ -5,6 +5,12 @@ All notable changes to Harbour are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-11
+
+Quality of life for people who live in the app all day: production hosts you
+can tell apart at a glance, a file manager for hosts that have no shell, a
+font picker, and a window that asks before it drops a live session.
+
 ### Added
 
 - **Tab colours.** A saved host can be given one of nine colours in its
